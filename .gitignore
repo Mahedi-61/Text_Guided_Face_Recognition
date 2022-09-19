@@ -1,3 +1,11 @@
-./__pycache__
-./__pycache__/*
+**/logs
+**/logs*
+**/data/*
+**/checkpoints
+**/imgs*
+**/vals*
+**/samples*
+*.zip
+**/saved_models/*
+**/__pycache__**
 !.gitignore

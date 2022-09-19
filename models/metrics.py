@@ -156,3 +156,14 @@ class SphereProduct(nn.Module):
                + 'in_features=' + str(self.in_features) \
                + ', out_features=' + str(self.out_features) \
                + ', m=' + str(self.m) + ')'
+
+
+
+class MyLinear(nn.Module):
+    def __init__(self, hidden, cls_num):
+        super().__init__()
+        self.output = nn.Linear(hidden, cls_num)
+        
+    def forward(self, x, label):
+        x = self.output(x)
+        return x

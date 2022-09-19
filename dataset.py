@@ -28,6 +28,7 @@ class Dataset(data.Dataset):
 
         if self.phase == 'train':
             self.transforms = T.Compose([
+                T.Resize(144),
                 T.RandomCrop(self.input_shape[1:]),
                 T.RandomHorizontalFlip(),
                 T.ToTensor(),
@@ -56,9 +57,9 @@ class Dataset(data.Dataset):
 
 
 if __name__ == '__main__':
-    dataset = Dataset(root='./data/Datasets/celeba/',
-                      data_list_file='./data/Datasets/celeba/celeba_test_pair.txt',
-                      phase='test',
+    dataset = Dataset(root='./data/Datasets/birds/images',
+                      data_list_file="./data/Datasets/birds/cleaned_list.txt",
+                      phase='train',
                       input_shape=(1, 128, 128))
     
     trainloader = data.DataLoader(dataset, batch_size=10)
