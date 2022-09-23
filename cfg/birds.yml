@@ -1,0 +1,69 @@
+CONFIG_NAME: birds
+dataset_name: birds
+data_dir: ./data/birds
+
+backbone: resnet18
+classify: softmax
+num_classes: 200 
+metric: nothing 
+easy_margin: False
+loss: cross_entropy
+optimizer: adam 
+use_se: False
+
+
+train_root: ./data/birds/CUB_200_2011/images 
+train_list: ./data/birds/CUB_200_2011/cleaned_list.txt  
+
+test_root: ./data/birds/CUB_200_2011/images                 
+test_pair_list: ./data/birds/CUB_200_2011/birds_test_pair.txt   
+
+
+num_workers: 2 
+gpu_id: [0, 1]
+imsize: 128
+z_dim: 100
+cond_dim: 256
+manual_seed: 100
+cuda: True
+
+
+#max_epoch: 250
+#lr: 0.1  # initial learning rate
+#lr_step: 10
+#lr_decay: 0.95  
+#weight_decay: 0.0005
+
+
+#state_epoch: 0
+max_epoch: 205 #1301
+batch_size: 48
+nf: 32
+
+ch_size: 1
+input_shape: (1, 128, 128)
+display: False
+finetune: False
+
+model: base
+test_interval: 5
+save_interval: 5
+
+truncation: True
+trunc_rate: 0.88
+
+checkpoints_path: ./checkpoints
+load_model_path: ./weights/birds/resnet18_birds_245.pth
+resume_model_path: ./saved_models/birds
+resume_epoch: 200
+
+example_captions: ./example_captions/bird.txt
+samples_save_dir: ./samples/bird/
+checkpoint: ./saved_models/bird/pretrained/state_epoch_1220.pth
+save_image: False
+
+TEXT:
+    WORDS_NUM: 18
+    EMBEDDING_DIM: 256
+    CAPTIONS_PER_IMAGE: 10
+    DAMSM_NAME: ./data/birds/DAMSMencoder/text_encoder200.pth

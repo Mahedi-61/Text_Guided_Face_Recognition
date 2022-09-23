@@ -2,10 +2,8 @@
 **/logs*
 **/data/*
 **/checkpoints
-**/imgs*
-**/vals*
 **/samples*
 *.zip
 **/saved_models/*
-**/__pycache__**
+__pycache__/
 !.gitignore

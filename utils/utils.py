@@ -94,14 +94,15 @@ def load_opt_weights(optimizer, weights):
     return optimizer
 
 
-def load_model_opt(netG, optim_G, path, multi_gpus):
+def load_model_opt(netG, optim_G, path):
     checkpoint = torch.load(path, map_location=torch.device('cpu'))
-    netG = load_model_weights(netG, checkpoint['model']['netG'], multi_gpus)
+    netG = load_model_weights(netG, checkpoint['model']['netG'])
     optim_G = load_opt_weights(optim_G, checkpoint['optimizers']['optimizer_G'])
     return netG, optim_G
 
 
 def load_models(netG, path):
+    print("loading netG model .....")
     checkpoint = torch.load(path, map_location=torch.device('cpu'))
     netG = load_model_weights(netG, checkpoint['model']['netG'])
     return netG
@@ -113,12 +114,12 @@ def load_netG(netG, path, multi_gpus, train):
     return netG
 
 
-def load_model_weights(model, weights, multi_gpus, train=True):
+def load_model_weights(model, weights, train=True):
+    multi_gpus = True 
     if list(weights.keys())[0].find('module')==-1:
         pretrained_with_multi_gpu = False
     else:
         pretrained_with_multi_gpu = True
-
     if (multi_gpus==False) or (train==False):
         if pretrained_with_multi_gpu:
             state_dict = {
@@ -133,14 +134,11 @@ def load_model_weights(model, weights, multi_gpus, train=True):
     return model
 
 
-def save_models(netG, optG, epoch, multi_gpus, save_path):
-    if (multi_gpus==True) and (get_rank() != 0):
-        None
-    else:
-        state = {'model': {'netG': netG.state_dict()}, \
-                'optimizers': {'optimizer_G': optG.state_dict()},\
-                'epoch': epoch}
-        torch.save(state, '%s/state_epoch_%03d.pth' % (save_path, epoch))
+def save_models(netG, optG, epoch, save_path):
+    state = {'model': {'netG': netG.state_dict()}, \
+            'optimizers': {'optimizer_G': optG.state_dict()},\
+            'epoch': epoch}
+    torch.save(state, '%s/state_epoch_%03d.pth' % (save_path, epoch))
 
 
 # data util

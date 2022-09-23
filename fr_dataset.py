@@ -10,7 +10,6 @@ import sys
 
 
 class Dataset(data.Dataset):
-
     def __init__(self, root, data_list_file, phase='train', input_shape=(1, 128, 128)):
         self.phase = phase
         self.input_shape = input_shape
@@ -20,9 +19,6 @@ class Dataset(data.Dataset):
 
         imgs = [os.path.join(root, img[:-1]) for img in imgs]
         self.imgs = np.random.permutation(imgs)
-
-        # normalize = T.Normalize(mean=[0.5, 0.5, 0.5],
-        #                         std=[0.5, 0.5, 0.5])
 
         normalize = T.Normalize(mean=[0.5], std=[0.5])
 
@@ -36,7 +32,7 @@ class Dataset(data.Dataset):
             ])
         else:
             self.transforms = T.Compose([
-                # T.Resize(144), for celeba dataset
+                T.Resize(144), 
                 T.CenterCrop(self.input_shape[1:]),
                 T.ToTensor(),
                 normalize
@@ -64,17 +60,9 @@ if __name__ == '__main__':
     
     trainloader = data.DataLoader(dataset, batch_size=10)
     for i, (data, label) in enumerate(trainloader):
-        #imgs, labels = data
-        #print (imgs.numpy().shape)
-        # print data.cpu().numpy()
-        # if i == 0:
         img = torchvision.utils.make_grid(data).numpy()
-        # print img.shape
-        # print label.shape
-        # chw -> hwc
         img = np.transpose(img, (1, 2, 0))
-        # img *= np.array([0.229, 0.224, 0.225])
-        # img += np.array([0.485, 0.456, 0.406])
+
         img += np.array([1, 1, 1])
         img *= 127.5
         img = img.astype(np.uint8)
@@ -82,5 +70,3 @@ if __name__ == '__main__':
 
         cv2.imshow('img', img)
         cv2.waitKey()
-        # break
-        # dst.decode_segmap(labels.numpy()[0], plot=True)

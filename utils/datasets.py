@@ -44,14 +44,32 @@ def get_fix_data(train_dl, test_dl, text_encoder, args):
     return fixed_image, fixed_sent, fixed_noise
 
 
-def prepare_data(data, text_encoder):
-    imgs, captions, caption_lens, keys = data
+def prepare_train_data(data, text_encoder):
+    imgs, captions, caption_lens, keys, label = data
     captions, sorted_cap_lens, sorted_cap_idxs = sort_sents(captions, caption_lens)
     sent_emb, words_embs = encode_tokens(text_encoder, captions, sorted_cap_lens)
     sent_emb = rm_sort(sent_emb, sorted_cap_idxs)
     words_embs = rm_sort(words_embs, sorted_cap_idxs)
     imgs = Variable(imgs).cuda()
-    return imgs, sent_emb, words_embs, keys
+    return imgs, sent_emb, words_embs, keys, label 
+
+
+def prepare_test_data(data, text_encoder):
+    img1, img2, cap1, cap2, cap_len1, cap_len2, pair_label = data
+
+    cap1, sorted_cap_len1, sorted_cap_idxs = sort_sents(cap1, cap_len1)
+    sent_emb1, words_embs1 = encode_tokens(text_encoder, cap1, sorted_cap_len1)
+    sent_emb1 = rm_sort(sent_emb1, sorted_cap_idxs)
+    words_embs1 = rm_sort(words_embs1, sorted_cap_idxs)
+
+    cap2, sorted_cap_len2, sorted_cap_idxs = sort_sents(cap2, cap_len2)
+    sent_emb2, words_embs2 = encode_tokens(text_encoder, cap2, sorted_cap_len2)
+    sent_emb2 = rm_sort(sent_emb2, sorted_cap_idxs)
+    words_embs2 = rm_sort(words_embs2, sorted_cap_idxs)
+
+    img1 = Variable(img1).cuda()
+    img2 = Variable(img2).cuda()
+    return img1, img2, sent_emb1, sent_emb2, pair_label 
 
 
 def sort_sents(captions, caption_lens):
@@ -82,7 +100,7 @@ def rm_sort(caption, sorted_cap_idxs):
 
 
 def get_imgs(img_path, bbox=None, transform=None, normalize=None):
-    img = Image.open(img_path).convert('RGB')
+    img = Image.open(img_path).convert('L') #RGB
     width, height = img.size
     if bbox is not None:
         r = int(np.maximum(bbox[2], bbox[3]) * 0.75)
@@ -100,11 +118,13 @@ def get_imgs(img_path, bbox=None, transform=None, normalize=None):
         img = normalize(img)
     return img
 
+
 ################################################################
 #                    Dataset
 ################################################################
 class TextImgDataset(data.Dataset):
     def __init__(self, split='train', transform=None, args=None):
+        print("############## Loading %s dataset ##################" % split)
         self.transform = transform
         self.word_num = args.TEXT.WORDS_NUM
         self.embeddings_num = args.TEXT.CAPTIONS_PER_IMAGE
@@ -112,7 +132,7 @@ class TextImgDataset(data.Dataset):
         self.dataset_name = args.dataset_name
         self.norm = transforms.Compose([
             transforms.ToTensor(),
-            transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))])
+            transforms.Normalize((0.5), (0.5))])
         self.split=split
         
         if self.data_dir.find('birds') != -1:
@@ -125,7 +145,9 @@ class TextImgDataset(data.Dataset):
             self.wordtoix, self.n_words = self.load_text_data(self.data_dir, split)
 
         self.class_id = self.load_class_id(split_dir, len(self.filenames))
-        self.number_example = len(self.filenames)
+
+        self.test_pair_list = args.test_pair_list
+        self.imgs_pair, self.pair_label = self.get_test_list()
 
 
     def load_bbox(self):
@@ -229,10 +251,11 @@ class TextImgDataset(data.Dataset):
 
     def load_text_data(self, data_dir, split):
         filepath = os.path.join(data_dir, 'captions_DAMSM.pickle')
-        train_names = self.load_filenames(data_dir, 'train')
-        test_names = self.load_filenames(data_dir, 'test')
 
         if not os.path.isfile(filepath):
+            train_names = self.load_filenames(data_dir, 'train')
+            test_names = self.load_filenames(data_dir, 'test')
+
             train_captions = self.load_captions(data_dir, train_names)
             test_captions = self.load_captions(data_dir, test_names)
 
@@ -242,7 +265,7 @@ class TextImgDataset(data.Dataset):
             with open(filepath, 'wb') as f:
                 pickle.dump([train_captions, test_captions, ixtoword, wordtoix], 
                              f, protocol=2)
-                print('Save to: ', filepath)
+                print('\nSave to: ', filepath)
         else:
             with open(filepath, 'rb') as f:
                 x = pickle.load(f)
@@ -250,13 +273,15 @@ class TextImgDataset(data.Dataset):
                 ixtoword, wordtoix = x[2], x[3]
                 del x
                 n_words = len(ixtoword)
-                print('Captions load from: ', filepath)
+                #print('\nCaptions load from: ', filepath)
 
         if split == 'train':
-            # a list of list: each list contains the indices of words in a sentence
+            train_names = self.load_filenames(data_dir, 'train')
             captions = train_captions
             filenames = train_names
-        else:  # split=='test'
+
+        elif split=='test':
+            test_names = self.load_filenames(data_dir, 'test')
             captions = test_captions
             filenames = test_names
 
@@ -265,13 +290,16 @@ class TextImgDataset(data.Dataset):
 
 
     def load_class_id(self, data_dir, total_num):
-        class_info_file = os.path.join(data_dir, "class_info.pickle")
+        filepath = os.path.join(data_dir, "class_info.pickle")
 
-        if os.path.isfile(class_info_file):
-            with open(class_info_file, 'rb') as f:
+        if os.path.isfile(filepath):
+            with open(filepath, 'rb') as f:
                 class_id = pickle.load(f, encoding="bytes")
+        """
         else:
             class_id = np.arange(total_num)
+        """
+        print('\nLoad %s class_info from: %s (%d)' % (data_dir, filepath, len(class_id)))
         return class_id
 
 
@@ -313,40 +341,83 @@ class TextImgDataset(data.Dataset):
 
         return x, x_len
 
+    def get_test_list(self):
+        with open(self.test_pair_list, 'r') as fd:
+            pairs = fd.readlines()
+        imgs_pair = []
+        pair_label = []
+        for pair in pairs:
+            splits = pair.split(" ")
+            imgs = [splits[0], splits[1]]
+            imgs_pair.append(imgs)
+            pair_label.append(int(splits[2]))
+        return imgs_pair, pair_label
+
 
     def __getitem__(self, index):
-        key = self.filenames[index]
-        cls_id = self.class_id[index]
-        
-        if self.bbox is not None:
-            bbox = self.bbox[key]
+        if self.split == "train":
+            key = self.filenames[index]
+            cls_id = self.class_id[index]
+            
+            if self.bbox is not None:
+                bbox = self.bbox[key]
+                data_dir = os.path.join(self.data_dir, "CUB_200_2011")
+            else:
+                bbox = None
+                data_dir = self.data_dir
+
+            if self.dataset_name.find('flower') != -1:
+                if self.split=='train':
+                    img_name = '%s/oxford-102-flowers/images/%s.jpg' % (data_dir, key)
+                else:
+                    img_name = '%s/oxford-102-flowers/images/%s.jpg' % (data_dir, key)
+
+            elif self.dataset_name.find('CelebA') != -1:
+                if self.split=='train':
+                    img_name = '%s/image/CelebA-HQ-img/%s.jpg' % (data_dir, key)
+                else:
+                    img_name = '%s/image/CelebA-HQ-img/%s.jpg' % (data_dir, key)
+            else:
+                img_name = '%s/images/%s.jpg' % (data_dir, key)
+
+            imgs = get_imgs(img_name, bbox, self.transform, normalize=self.norm)
+    
+            # random select a sentence
+            sent_ix = random.randint(0, self.embeddings_num)
+            new_sent_ix = index * self.embeddings_num + sent_ix
+            caps, cap_len = self.get_caption(new_sent_ix)
+            return imgs, caps, cap_len, key, cls_id 
+
+        elif self.split == "test":
+            imgs = self.imgs_pair[index]
+            pair_label = self.pair_label[index]
             data_dir = os.path.join(self.data_dir, "CUB_200_2011")
-        else:
-            bbox = None
-            data_dir = self.data_dir
 
-        if self.dataset_name.find('flower') != -1:
-            if self.split=='train':
-                img_name = '%s/oxford-102-flowers/images/%s.jpg' % (data_dir, key)
-            else:
-                img_name = '%s/oxford-102-flowers/images/%s.jpg' % (data_dir, key)
+            img1_name = '%s/images/%s' % (data_dir, imgs[0])
+            img2_name = '%s/images/%s' % (data_dir, imgs[1])
 
-        elif self.dataset_name.find('CelebA') != -1:
-            if self.split=='train':
-                img_name = '%s/image/CelebA-HQ-img/%s.jpg' % (data_dir, key)
-            else:
-                img_name = '%s/image/CelebA-HQ-img/%s.jpg' % (data_dir, key)
-        else:
-            img_name = '%s/images/%s.jpg' % (data_dir, key)
+            key1 = imgs[0][:-4]
+            key2 = imgs[1][:-4]
 
-        imgs = get_imgs(img_name, bbox, self.transform, normalize=self.norm)
-  
-        # random select a sentence
-        sent_ix = random.randint(0, self.embeddings_num)
-        new_sent_ix = index * self.embeddings_num + sent_ix
-        caps, cap_len = self.get_caption(new_sent_ix)
-        return imgs, caps, cap_len, key
+            bbox1 = self.bbox[key1]
+            bbox2 = self.bbox[key2]
 
+            img1 = get_imgs(img1_name, bbox1, self.transform, normalize=self.norm)
+            img2 = get_imgs(img2_name, bbox2, self.transform, normalize=self.norm)
+
+            real_index1 = self.filenames.index(key1)
+            real_index2 = self.filenames.index(key2)
+
+            # random select a sentence
+            sent_ix = random.randint(0, self.embeddings_num)
+            new_sent_ix1 = real_index1 * self.embeddings_num + sent_ix
+            cap1, cap_len1 = self.get_caption(new_sent_ix1)
+
+            new_sent_ix2 = real_index2 * self.embeddings_num + sent_ix
+            cap2, cap_len2 = self.get_caption(new_sent_ix2)
+
+            return img1, img2, cap1, cap2, cap_len1, cap_len2, pair_label
 
     def __len__(self):
-        return len(self.filenames)
+        if self.split == "train": return len(self.filenames)
+        elif self.split == "test": return len (self.imgs_pair)

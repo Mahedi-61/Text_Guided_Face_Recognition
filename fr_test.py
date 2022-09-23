@@ -5,9 +5,9 @@ from models import metrics, resnet, focal_loss
 import torch
 import numpy as np
 import time
-from config import Config 
+import argparse
 from torch.nn import DataParallel
-
+from utils.utils import merge_args_yaml, mkdir_p
 
 def get_test_list(pair_list):
     with open(pair_list, 'r') as fd:
@@ -59,7 +59,7 @@ def get_featurs(model, test_list, batch_size=10):
             data = data.to(torch.device("cuda"))
             output = model(data)
             output = output.data.cpu().numpy()
-
+            print(output[::2].shape)
             fe_1 = output[::2]
             fe_2 = output[1::2]
             feature = np.hstack((fe_1, fe_2))
@@ -140,29 +140,33 @@ def test(model, img_paths, identity_list, compair_list, batch_size):
     return acc
     
 
-
 if __name__ == '__main__':
-    opt = Config()
-    
-    if opt.backbone == 'resnet18':
-        if opt.dataset == "webface":
-            model = resnet.resnet_face18(use_se=opt.use_se)
-        elif opt.dataset == "birds":
-            model = resnet.resnet_face18(use_se=opt.use_se)
+    parser = argparse.ArgumentParser(description='archface')
+    parser.add_argument('--cfg', dest='cfg_file', type=str, 
+                        default='./cfg/birds.yml',
+                        help='optional config file')
 
-    elif opt.backbone == 'resnet34':
+    args = merge_args_yaml(parser.parse_args())
+    
+    if args.backbone == 'resnet18':
+        if args.CONFIG_NAME == "webface":
+            model = resnet.resnet_face18(use_se=args.use_se)
+        elif args.CONFIG_NAME == "birds":
+            model = resnet.resnet_face18(use_se=args.use_se)
+
+    elif args.backbone == 'resnet34':
         model = resnet.resnet34()
     
-    elif opt.backbone == 'resnet50':
+    elif args.backbone == 'resnet50':
         model = resnet.resnet50()
 
     model = DataParallel(model)
-    model.load_state_dict(torch.load(opt.load_model_path))
+    model.load_state_dict(torch.load(args.load_model_path))
     model.to(torch.device("cuda"))
     
-    identity_list = get_test_list(opt.test_pair_list)
-    img_paths = [os.path.join(opt.test_root, each) for each in identity_list]
+    identity_list = get_test_list(args.test_pair_list)
+    img_paths = [os.path.join(args.test_root, each) for each in identity_list]
 
     model.eval()
-    test(model, img_paths, identity_list, opt.test_pair_list, opt.test_batch_size)
+    test(model, img_paths, identity_list, args.test_pair_list, args.batch_size)
     

@@ -31,12 +31,10 @@ def parse_args():
     parser = argparse.ArgumentParser(description='DF-GAN')
     parser.add_argument('--cfg', dest='cfg_file', type=str, default='./cfg/bird.yml',
                         help='optional config file')
-    parser.add_argument('--imgs_per_sent', type=int, default=16, 
-                        help='the number of images per sentence')
+    parser.add_argument('--imgs_per_sent', type=int, default=16, help='the number of images per sentence')
     parser.add_argument('--imsize', type=int, default=256, help='image szie')
     parser.add_argument('--cuda', type=bool, default=True, help='if use GPU')
-    parser.add_argument('--train', type=bool, default=False, help='if training')
-                help='whether to sample the dataset with random sampler')
+    parser.add_argument('--train', type=bool, default=False, help='if training' help='whether to sample the dataset with random sampler')
     args = parser.parse_args()
     return args
 
@@ -119,18 +117,8 @@ if __name__ == "__main__":
     np.random.seed(args.manual_seed)
     torch.manual_seed(args.manual_seed)
     
-    if args.cuda:
-        if args.multi_gpus:
-            torch.cuda.manual_seed_all(args.manual_seed)
-            torch.distributed.init_process_group(backend="nccl")
-            local_rank = torch.distributed.get_rank()
-            torch.cuda.set_device(local_rank)
-            args.device = torch.device("cuda", local_rank)
-            args.local_rank = local_rank
-        else:
-            torch.cuda.manual_seed_all(args.manual_seed)
-            torch.cuda.set_device(args.gpu_id)
-            args.device = torch.device("cuda")
-    else:
-        args.device = torch.device('cpu')
+    torch.cuda.manual_seed_all(args.manual_seed)
+    torch.cuda.set_device(args.gpu_id)
+    args.device = torch.device("cuda")
+
     main(args)

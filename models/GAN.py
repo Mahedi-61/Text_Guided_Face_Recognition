@@ -6,9 +6,9 @@ from collections import OrderedDict
 from torchsummary import summary
 
 
-class NetG(nn.Module):
+class NetG1(nn.Module):
     def __init__(self, ngf, nz, cond_dim, imsize, ch_size):
-        super(NetG, self).__init__()
+        super(NetG1, self).__init__()
         self.ngf = ngf
         # input noise (batch_size, 100)
         self.fc = nn.Linear(nz, ngf*8*4*4)
@@ -35,6 +35,22 @@ class NetG(nn.Module):
         # convert to RGB image
         out = self.to_rgb(out)
         return out
+
+
+class NetG(nn.Module):
+    def __init__(self, num_classes):
+        super(NetG, self).__init__()
+        self.fc1 = nn.Linear(1280, 1024)
+        self.relu1 = nn.ReLU(inplace=True)
+        self.fc2 = nn.Linear(1024, num_classes)
+        self.relu2 = nn.ReLU(inplace=True)
+
+    def forward(self, img_features, cond):
+        concat_features = torch.cat((img_features, cond), dim=1)
+        out = self.fc1(concat_features)
+        out = self.relu1(out)
+        out = self.fc2(out)
+        return self.relu2(out)
 
 
 class G_Block(nn.Module):
@@ -130,5 +146,5 @@ def get_G_in_out_chs(nf, imsize):
 
 if __name__ == "__main__":
     print("Bismillah")
-    model = NetG(ngf = 32, nz = 100, cond_dim = 256, imsize = 256, ch_size = 1)
-    summary(model,  [(100,), (256,)], device='cpu')
+    model = NetG(num_classes=200)
+    summary(model,  [(1024,), (256,)], device='cpu')
