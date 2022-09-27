@@ -1,4 +1,3 @@
-import os, sys
 import os.path as osp
 from PIL import Image
 
@@ -7,11 +6,14 @@ import torchvision.transforms as transforms
 import torchvision.utils as vutils
 
 
-from utils.datasets import TextImgDataset as Dataset
+from utils.train_dataset import TextImgTrainDataset
+from utils.test_dataset import TextImgTestDataset 
+
 from utils.utils import load_model_weights
 from models.DAMSM import RNN_ENCODER, CNN_ENCODER
 from models.GAN import NetG
 from models.resnet import resnet_face18 
+
 
 ###########   preparation   ############
 def prepare_models(args):
@@ -62,7 +64,7 @@ def prepare_dataset(args, split, transform):
     if transform is not None:
         image_transform = transform
 
-    elif args.CONFIG_NAME.find('celeba') != -1:
+    elif args.dataset_name.find('celeba') != -1:
         image_transform = transforms.Compose([
             transforms.Resize(int(imsize)),
             transforms.RandomCrop(imsize),
@@ -79,16 +81,19 @@ def prepare_dataset(args, split, transform):
                 transforms.Resize(144),
                 transforms.RandomCrop(imsize)])
 
-    return Dataset(split=split, transform=image_transform, args=args)
+    if (split == "train"):
+        return TextImgTrainDataset(transform=image_transform, args=args)
+
+    elif (split == "test"):
+        return TextImgTestDataset(transform=image_transform, args=args)
 
 
 def get_train_dataloader(args, transform=None):
     train_dataset = prepare_dataset(args, split='train', transform=transform)
     
-
     train_dataloader = torch.utils.data.DataLoader(
         train_dataset, 
-        batch_size=args.batch_size, 
+        batch_size=args.train_batch_size, 
         drop_last=True,
         num_workers=args.num_workers, 
         shuffle=True)
@@ -100,9 +105,8 @@ def get_test_dataloader(args, transform=None):
     test_dataset = prepare_dataset(args, split='test', transform=transform)
     test_dataloader = torch.utils.data.DataLoader(
             test_dataset, 
-            batch_size=args.batch_size, 
+            batch_size=args.test_batch_size, 
             num_workers=args.num_workers, 
             shuffle=False)
 
     return test_dataloader, test_dataset
-

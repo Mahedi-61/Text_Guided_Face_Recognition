@@ -1,29 +1,17 @@
 import os
-import sys
 import errno
 import numpy as np
-import numpy.random as random
 import torch
-from torch import distributed as dist
-import json
 import pickle
-from tqdm import tqdm
 import yaml
 from easydict import EasyDict as edict
 import pprint
 import datetime
 import dateutil.tz
-from io import BytesIO
 from PIL import Image
-from torchvision import transforms, datasets
 
 # test_utils
 def params_count(model):
-    """
-    Compute the number of parameters.
-    Args:
-        model (model): model to count the number of parameters.
-    """
     return np.sum([p.numel() for p in model.parameters()]).item()
 
 
@@ -34,13 +22,6 @@ def load_npz(path):
     return m, s
 
 
-def truncated_noise(batch_size=1, dim_z=100, truncation=1., seed=None):
-    from scipy.stats import truncnorm
-    state = None if seed is None else np.random.RandomState(seed)
-    values = truncnorm.rvs(-2, 2, size=(batch_size, dim_z), random_state=state).astype(np.float32)
-    return truncation * values
-
-
 def mkdir_p(path):
     try:
         os.makedirs(path)
@@ -49,7 +30,6 @@ def mkdir_p(path):
             pass
         else:
             raise
-
 
 # config
 def get_time_stamp():
@@ -78,14 +58,6 @@ def save_args(save_path, args):
     fp.write(yaml.dump(args))
     fp.close()
 
-
-# DDP utils
-def get_rank():
-    if not dist.is_available():
-        return 0
-    if not dist.is_initialized():
-        return 0
-    return dist.get_rank()
 
 
 # save and load models
@@ -207,6 +179,7 @@ def sort_example_captions(captions, cap_lens, device):
     return captions, cap_lens, sorted_indices
 
 
+"""
 def prepare_sample_data(captions, caption_lens, text_encoder, device):
     print('*'*40)
     captions, sorted_cap_lens, sorted_cap_idxs = sort_example_captions(captions, caption_lens, device)
@@ -214,7 +187,7 @@ def prepare_sample_data(captions, caption_lens, text_encoder, device):
     sent_emb = rm_sort(sent_emb, sorted_cap_idxs)
     words_embs = rm_sort(words_embs, sorted_cap_idxs)
     return sent_emb, words_embs
-
+"""
 
 def encode_tokens(text_encoder, caption, cap_lens):
     # encode text

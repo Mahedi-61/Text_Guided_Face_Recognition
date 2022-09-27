@@ -43,14 +43,13 @@ class NetG(nn.Module):
         self.fc1 = nn.Linear(1280, 1024)
         self.relu1 = nn.ReLU(inplace=True)
         self.fc2 = nn.Linear(1024, num_classes)
-        self.relu2 = nn.ReLU(inplace=True)
 
     def forward(self, img_features, cond):
         concat_features = torch.cat((img_features, cond), dim=1)
         out = self.fc1(concat_features)
         out = self.relu1(out)
         out = self.fc2(out)
-        return self.relu2(out)
+        return out 
 
 
 class G_Block(nn.Module):

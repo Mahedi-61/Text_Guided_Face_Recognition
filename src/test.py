@@ -27,7 +27,7 @@ def parse_args():
 
 def main(args):
     # prepare dataloader, models, data
-    args.model_save_file = osp.join(ROOT_PATH, 'saved_models', str(args.CONFIG_NAME))
+    args.model_save_file = osp.join(ROOT_PATH, 'saved_models', str(args.dataset_name))
     mkdir_p(args.model_save_file)
 
     test_dl, test_ds = get_test_dataloader(args)

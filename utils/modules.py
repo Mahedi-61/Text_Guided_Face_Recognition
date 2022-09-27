@@ -1,26 +1,20 @@
 import os
 import os.path as osp
 from scipy import linalg
+from sklearn import metrics
 import numpy as np
 from PIL import Image
-from tqdm import tqdm, trange
+from tqdm import tqdm
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import torch.optim as optim
-import torch.backends.cudnn as cudnn
-import torchvision.transforms as transforms
 import torchvision.utils as vutils
 from torchvision.utils import save_image, make_grid
-from utils.utils import truncated_noise
-from utils.utils import mkdir_p, get_rank
+from utils.utils import mkdir_p
 
-from utils.datasets import TextImgDataset as Dataset
-from utils.datasets import prepare_train_data, prepare_test_data, encode_tokens
-from models.inception import InceptionV3
-
-from torch.nn.functional import adaptive_avg_pool2d
-import torch.distributed as dist
+from utils.train_dataset import prepare_train_data
+from utils.test_dataset import prepare_test_data
 
 
 ############   modules   ############
@@ -51,8 +45,17 @@ def get_features(model, imgs):
     return img_features
 
 
+def calculate_scores(y_score, y_true):
+    # sklearn always takes (y_true, y_pred)
+    fprs, tprs, threshold = metrics.roc_curve(y_true, y_score)
+    eer = fprs[np.nanargmin(np.absolute((1 - tprs) - fprs))]
+    auc = metrics.auc(fprs, tprs)
+
+    print("AUC {:.4f} | EER {:.4f}".format(auc, eer))
+    return auc, eer 
+
+
 def train(train_dl, model, netG, text_encoder, optimizerG, args):
-    batch_size = args.batch_size
     device = args.device
     epoch = args.current_epoch
     max_epoch = args.max_epoch
@@ -65,7 +68,7 @@ def train(train_dl, model, netG, text_encoder, optimizerG, args):
         imgs, sent_emb, words_embs, keys, label = prepare_train_data(data, text_encoder)
         imgs = imgs.to(device).requires_grad_()
         sent_emb = sent_emb.to(device).requires_grad_()
-        words_embs = words_embs.to(device).requires_grad_()
+        #words_embs = words_embs.to(device).requires_grad_()
         label = label.to(device)
         
         img_features = get_features(model, imgs)
@@ -85,7 +88,6 @@ def train(train_dl, model, netG, text_encoder, optimizerG, args):
 
 
 def test(test_dl, model, netG, text_encoder, args):
-    batch_size = args.batch_size
     device = args.device
     netG = netG.eval()
     preds = []
@@ -115,76 +117,7 @@ def test(test_dl, model, netG, text_encoder, args):
 
     best_acc, best_th = cal_accuracy(preds, labels)
     print("accuracy: ", best_acc)
-
-def eval(dataloader, text_encoder, netG, device, m1, s1, save_imgs, save_dir,
-                times, z_dim, batch_size, truncation=True, trunc_rate=0.86):
-    """ Calculates the FID """
-    # prepare Inception V3
-    dims = 2048
-    block_idx = InceptionV3.BLOCK_INDEX_BY_DIM[dims]
-    model = InceptionV3([block_idx])
-    model.to(device)
-    model.eval()
-    netG.eval()
-    norm = transforms.Compose([
-        transforms.Normalize((-1, -1, -1), (2, 2, 2)),
-        transforms.Resize((299, 299)),
-        ])
-    n_gpu = dist.get_world_size()
-    dl_length = dataloader.__len__()
-    imgs_num = dl_length * n_gpu * batch_size * times
-    pred_arr = np.empty((imgs_num, dims))
-    if (n_gpu!=1) and (get_rank() != 0):
-        None
-    else:
-        loop = tqdm(total=int(dl_length*times))
-    for time in range(times):
-        for i, data in enumerate(dataloader):
-            start = i * batch_size * n_gpu + time * dl_length * n_gpu * batch_size
-            end = start + batch_size * n_gpu
-            ######################################################
-            # (1) Prepare_data
-            ######################################################
-            imgs, sent_emb, words_embs, keys = prepare_data(data, text_encoder)
-            sent_emb = sent_emb.to(device)
-            ######################################################
-            # (2) Generate fake images
-            ######################################################
-            batch_size = sent_emb.size(0)
-            netG.eval()
-            with torch.no_grad():
-                if truncation==True:
-                    noise = truncated_noise(batch_size, z_dim, trunc_rate)
-                    noise = torch.tensor(noise, dtype=torch.float).to(device)
-                else:
-                    noise = torch.randn(batch_size, z_dim).to(device)
-                fake_imgs = netG(noise,sent_emb)
-                if save_imgs==True:
-                    save_single_imgs(fake_imgs, save_dir, time, dl_length, i, batch_size)
-                fake = norm(fake_imgs)
-                pred = model(fake)[0]
-                if pred.shape[2] != 1 or pred.shape[3] != 1:
-                    pred = adaptive_avg_pool2d(pred, output_size=(1, 1))
-                # concat pred from multi GPUs
-                output = list(torch.empty_like(pred) for _ in range(n_gpu))
-                dist.all_gather(output, pred)
-                pred_all = torch.cat(output, dim=0).squeeze(-1).squeeze(-1)
-                pred_arr[start:end] = pred_all.cpu().data.numpy()
-            # update loop information
-            if (n_gpu!=1) and (get_rank() != 0):
-                None
-            else:
-                loop.update(1)
-                loop.set_description(f'Evaluating:')
-                loop.set_postfix()
-    if (n_gpu!=1) and (get_rank() != 0):
-        None
-    else:
-        loop.close()
-    m2 = np.mean(pred_arr, axis=0)
-    s2 = np.cov(pred_arr, rowvar=False)
-    fid_value = calculate_frechet_distance(m1, s1, m2, s2)
-    return fid_value
+    calculate_scores(preds, labels)
 
 
 def save_single_imgs(imgs, save_dir, time, dl_len, batch_n, batch_size):
@@ -238,26 +171,6 @@ def calculate_frechet_distance(mu1, sigma1, mu2, sigma2, eps=1e-6):
 
     return (diff.dot(diff) + np.trace(sigma1) +
             np.trace(sigma2) - 2 * tr_covmean)
-
-
-def sample_one_batch(noise, sent, netG, multi_gpus, epoch, img_save_dir, writer):
-    fixed_results = generate_samples(noise, sent, netG)
-    if (multi_gpus==True) and (get_rank() != 0):
-        None
-    else:
-        if writer!=None:
-            fixed_grid = make_grid(fixed_results.cpu(), nrow=8, range=(-1, 1), normalize=True)
-            writer.add_image('fixed results', fixed_grid, epoch)
-        img_name = 'samples_epoch_%03d.png'%(epoch)
-        img_save_path = osp.join(img_save_dir, img_name)
-        vutils.save_image(fixed_results.data, img_save_path, nrow=8, range=(-1, 1), normalize=True)
-
-
-def generate_samples(noise, caption, model):
-    with torch.no_grad():
-        fake = model(noise, caption)
-    return fake
-
 
 
 def predict_loss(predictor, img_feature, text_feature, negtive):
