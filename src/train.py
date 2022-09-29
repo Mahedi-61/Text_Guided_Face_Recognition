@@ -38,11 +38,11 @@ def main(args):
     image_encoder, text_encoder, model, netG = prepare_models(args)
 
     optimizerG = torch.optim.Adam(netG.parameters(), 
-                                 lr=0.0005, 
+                                 lr=0.0009, 
                                  betas=(0.0, 0.9))
                                  
     scheduler = torch.optim.lr_scheduler.MultiplicativeLR(optimizerG, 
-                                    lr_lambda=args.multi_lr_step)
+                                    lr_lambda=lambda epoch: args.multi_lr_step)
     
     # load from checkpoint
     strat_epoch = 1
@@ -62,6 +62,7 @@ def main(args):
         if epoch % args.save_interval==0:
             save_models(netG, optimizerG, epoch, args.model_save_file)
             scheduler.step()
+            print("learning rate: ", optimizerG.param_groups[0]['lr'])
         
         if ((args.do_test == True) and (epoch % args.test_interval == 0)):
             print("Let's test the model")

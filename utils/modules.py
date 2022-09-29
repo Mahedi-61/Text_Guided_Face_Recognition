@@ -85,6 +85,7 @@ def train(train_dl, model, netG, text_encoder, optimizerG, args):
         loop.set_postfix()
 
     loop.close()
+    del img_features
 
 
 def test(test_dl, model, netG, text_encoder, args):

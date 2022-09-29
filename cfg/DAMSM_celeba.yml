@@ -1,0 +1,37 @@
+CONFIG_NAME: 'DAMSM'
+dataset_name: 'celeba'
+data_dir: ./data/celeba
+
+num_workers: 2 
+gpu_id: [0, 1]
+imsize: 299
+cond_dim: 256
+manual_seed: 100
+CUDA: True
+
+img_size: 299
+test_batch_size: 48
+train_batch_size: 320
+checkpoints_path: ./checkpoints
+test_pair_list: ./data/celeba/celeba/celeba_test_pair.txt  
+test_interval: 4
+save_interval: 4
+
+
+RNN_TYPE: LSTM #GRU  
+TRAIN:
+    FLAG: True
+    NET_E: '' 
+    MAX_EPOCH: 8
+    ENCODER_LR: 0.002 
+    RNN_GRAD_CLIP: 0.25
+    SMOOTH:
+        GAMMA1: 4.0  
+        GAMMA2: 5.0
+        GAMMA3: 10.0
+
+
+TEXT:
+    EMBEDDING_DIM: 256
+    CAPTIONS_PER_IMAGE: 10
+    WORDS_NUM: 18

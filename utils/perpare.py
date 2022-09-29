@@ -18,10 +18,9 @@ from models.resnet import resnet_face18
 ###########   preparation   ############
 def prepare_models(args):
     device = args.device
-    n_words = args.vocab_size
     
     # image encoder
-    image_encoder = CNN_ENCODER(args.TEXT.EMBEDDING_DIM)
+    image_encoder = CNN_ENCODER()
     img_encoder_path = args.TEXT.DAMSM_NAME.replace('text_encoder', 'image_encoder')
     state_dict = torch.load(img_encoder_path, map_location='cpu')
     image_encoder = load_model_weights(image_encoder, state_dict)
@@ -33,7 +32,7 @@ def prepare_models(args):
 
     # text encoder
     print("loading text encoder")
-    text_encoder = RNN_ENCODER(n_words, nhidden=args.TEXT.EMBEDDING_DIM)
+    text_encoder = RNN_ENCODER(args, nhidden=args.TEXT.EMBEDDING_DIM)
     state_dict = torch.load(args.TEXT.DAMSM_NAME, map_location='cpu')
     text_encoder = load_model_weights(text_encoder, state_dict)
     text_encoder.cuda()
@@ -64,11 +63,6 @@ def prepare_dataset(args, split, transform):
     if transform is not None:
         image_transform = transform
 
-    elif args.dataset_name.find('celeba') != -1:
-        image_transform = transforms.Compose([
-            transforms.Resize(int(imsize)),
-            transforms.RandomCrop(imsize),
-            transforms.RandomHorizontalFlip()])
     else:
         if (split == "train"):
             image_transform = transforms.Compose([
@@ -98,7 +92,6 @@ def get_train_dataloader(args, transform=None):
         num_workers=args.num_workers, 
         shuffle=True)
     return train_dataloader, train_dataset
-
 
 
 def get_test_dataloader(args, transform=None):

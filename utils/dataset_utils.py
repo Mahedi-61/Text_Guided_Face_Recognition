@@ -2,7 +2,7 @@ from nltk.tokenize import RegexpTokenizer
 from collections import defaultdict
 import torch
 from torch.autograd import Variable
-
+import torchvision.transforms as transforms
 import os
 import numpy as np
 import pandas as pd
@@ -37,8 +37,20 @@ def rm_sort(caption, sorted_cap_idxs):
     return non_sort_cap
 
 
-def get_imgs(img_path, bbox=None, transform=None, normalize=None):
-    img = Image.open(img_path).convert('L') #RGB
+def get_imgs(img_path, config, bbox=None, transform=None):
+
+    if config == "DAMSM":
+        img = Image.open(img_path).convert('RGB')
+        norm = transforms.Compose([
+            transforms.ToTensor(),
+            transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))])
+
+    elif config == "FE":
+        img = Image.open(img_path).convert('L')
+        norm = transforms.Compose([
+            transforms.ToTensor(),
+            transforms.Normalize((0.5), (0.5))])
+
     width, height = img.size
     if bbox is not None:
         r = int(np.maximum(bbox[2], bbox[3]) * 0.75)
@@ -52,8 +64,8 @@ def get_imgs(img_path, bbox=None, transform=None, normalize=None):
 
     if transform is not None:
         img = transform(img)
-    if normalize is not None:
-        img = normalize(img)
+
+    img = norm(img)
     return img
 
 

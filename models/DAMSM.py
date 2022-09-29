@@ -7,18 +7,21 @@ import torch.utils.model_zoo as model_zoo
 import torch.nn.functional as F
 from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
 
+
+
 # ############## Text2Image Encoder-Decoder #######
 class RNN_ENCODER(nn.Module):
-    def __init__(self, ntoken, ninput=300, drop_prob=0.5,
+    def __init__(self, args, ninput=300, drop_prob=0.5,
                  nhidden=128, nlayers=1, bidirectional=True):
         super(RNN_ENCODER, self).__init__()
-        self.n_steps = 18
-        self.ntoken = ntoken  # size of the dictionary
+
+        self.n_steps = args.TEXT.WORDS_NUM
+        self.ntoken = args.vocab_size  # size of the dictionary
         self.ninput = ninput  # size of each embedding vector
         self.drop_prob = drop_prob  # probability of an element to be zeroed
-        self.nlayers = nlayers  # Number of recurrent layers
+        self.nlayers = nlayers  # number of recurrent layers
         self.bidirectional = bidirectional
-        self.rnn_type = 'LSTM'
+        self.rnn_type = args.RNN_TYPE
         if bidirectional:
             self.num_directions = 2
         else:
@@ -50,10 +53,6 @@ class RNN_ENCODER(nn.Module):
     def init_weights(self):
         initrange = 0.1
         self.encoder.weight.data.uniform_(-initrange, initrange)
-        # Do not need to initialize RNN parameters, which have been initialized
-        # http://pytorch.org/docs/master/_modules/torch/nn/modules/rnn.html#LSTM
-        # self.decoder.weight.data.uniform_(-initrange, initrange)
-        # self.decoder.bias.data.fill_(0)
 
     def init_hidden(self, bsz):
         weight = next(self.parameters()).data
@@ -102,17 +101,17 @@ def conv1x1(in_planes, out_planes, bias=False):
 
 
 class CNN_ENCODER(nn.Module):
-    def __init__(self, nef):
+    def __init__(self):
         super(CNN_ENCODER, self).__init__()
         self.nef = 256  # define a uniform ranker
 
         model = models.inception_v3()
-        # url = 'https://download.pytorch.org/models/inception_v3_google-1a9a5a14.pth'
-        # model.load_state_dict(model_zoo.load_url(url))
-        # print('Load pretrained model from ', url)
+        url = 'https://download.pytorch.org/models/inception_v3_google-1a9a5a14.pth'
+        model.load_state_dict(model_zoo.load_url(url))
+
         for param in model.parameters():
             param.requires_grad = False
-        # print(model)
+        print('Load pretrained model from ', url)
 
         self.define_module(model)
         self.init_trainable_weights()
@@ -204,3 +203,8 @@ class CNN_ENCODER(nn.Module):
         if features is not None:
             features = self.emb_features(features)
         return features, cnn_code
+
+
+if __name__ == "__main__":
+    rnn = RNN_ENCODER(5450)
+    print(rnn)

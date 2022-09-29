@@ -1,7 +1,6 @@
 import torch
 import torch.utils.data as data
 from torch.autograd import Variable
-import torchvision.transforms as transforms
 from utils.dataset_utils import *
 
 import os
@@ -26,6 +25,16 @@ def prepare_train_data(data, text_encoder):
     return imgs, sent_emb, words_embs, keys, label 
 
 
+def prepare_train_data_for_DAMSM(data, text_encoder):
+    imgs, captions, caption_lens, keys, cls_ids = data
+    captions, sorted_cap_lens, sorted_cap_idxs = sort_sents(captions, caption_lens)
+    sent_emb, words_embs = encode_tokens(text_encoder, captions, sorted_cap_lens)
+    sent_emb = rm_sort(sent_emb, sorted_cap_idxs)
+    words_embs = rm_sort(words_embs, sorted_cap_idxs)
+    imgs = Variable(imgs).cuda()
+    return imgs, sent_emb, words_embs, keys, cls_ids, caption_lens
+
+
 class TextImgTrainDataset(data.Dataset):
     def __init__(self, transform=None, args=None):
         print("############## Loading train dataset ##################")
@@ -35,10 +44,6 @@ class TextImgTrainDataset(data.Dataset):
         self.data_dir = args.data_dir
         self.dataset_name = args.dataset_name
         self.split = "train"
-
-        self.norm = transforms.Compose([
-            transforms.ToTensor(),
-            transforms.Normalize((0.5), (0.5))])
         
         if self.data_dir.find('birds') != -1:
             self.bbox = load_bbox(self.data_dir)
@@ -50,6 +55,7 @@ class TextImgTrainDataset(data.Dataset):
                     load_text_data(self.data_dir, self.split, self.embeddings_num)
 
         self.class_id = load_class_id(split_dir)
+        self.config = args.CONFIG_NAME
 
 
     def get_caption(self, sent_ix):
@@ -94,7 +100,7 @@ class TextImgTrainDataset(data.Dataset):
         else:
             img_name = '%s/images/%s.jpg' % (data_dir, key)
 
-        imgs = get_imgs(img_name, bbox, self.transform, normalize=self.norm)
+        imgs = get_imgs(img_name, self.config, bbox, self.transform)
 
         # random select a sentence
         sent_ix = random.randint(0, self.embeddings_num)
