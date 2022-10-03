@@ -1,5 +1,6 @@
 import os
 import errno
+from tabnanny import check
 import numpy as np
 import torch
 import pickle
@@ -10,16 +11,9 @@ import datetime
 import dateutil.tz
 from PIL import Image
 
-# test_utils
+
 def params_count(model):
     return np.sum([p.numel() for p in model.parameters()]).item()
-
-
-def load_npz(path):
-    f = np.load(path)
-    m, s = f['mu'][:], f['sigma'][:]
-    f.close()
-    return m, s
 
 
 def mkdir_p(path):
@@ -66,24 +60,36 @@ def load_opt_weights(optimizer, weights):
     return optimizer
 
 
-def load_model_opt(netG, optim_G, path):
+def load_full_model_for_image_rec(model, metric_fc, optim, path):
+    checkpoint = torch.load(path, map_location=torch.device('cpu'))
+    model = load_model_weights(model, checkpoint['full_model']['model'])
+    metric_fc = load_model_weights(metric_fc, checkpoint['full_model']['metric_fc'])
+    optim = load_opt_weights(optim, checkpoint['optimizer']['optimizer'])
+    return model, metric_fc, optim
+
+
+def load_only_model_for_image_rec(model, path, prev_weight):
+    checkpoint = torch.load(path) 
+    if prev_weight == True: model.load_state_dict(checkpoint)
+    else: model.load_state_dict(checkpoint["full_model"]["model"])
+    return model 
+
+
+def load_model_opt(netG, metric_fc, optim, path):
+    print("loading full tgfr model .....")
     checkpoint = torch.load(path, map_location=torch.device('cpu'))
     netG = load_model_weights(netG, checkpoint['model']['netG'])
-    optim_G = load_opt_weights(optim_G, checkpoint['optimizers']['optimizer_G'])
-    return netG, optim_G
+    metric_fc = load_model_weights(metric_fc, checkpoint['model']['metric_fc'])
+    optim = load_opt_weights(optim, checkpoint['optimizer']['optimizer'])
+    return netG, metric_fc, optim 
 
 
-def load_models(netG, path):
-    print("loading netG model .....")
+def load_model(netG, path):
+    print("loading full tgfr model .....")
     checkpoint = torch.load(path, map_location=torch.device('cpu'))
     netG = load_model_weights(netG, checkpoint['model']['netG'])
     return netG
 
-
-def load_netG(netG, path, multi_gpus, train):
-    checkpoint = torch.load(path, map_location="cpu")
-    netG = load_model_weights(netG, checkpoint['model']['netG'], multi_gpus, train)
-    return netG
 
 
 def load_model_weights(model, weights, train=True):
@@ -106,11 +112,10 @@ def load_model_weights(model, weights, train=True):
     return model
 
 
-def save_models(netG, optG, epoch, save_path):
-    state = {'model': {'netG': netG.state_dict()}, \
-            'optimizers': {'optimizer_G': optG.state_dict()},\
-            'epoch': epoch}
-    torch.save(state, '%s/state_epoch_%03d.pth' % (save_path, epoch))
+def save_models(netG, metric_fc, optG, epoch, args):
+    state = {'model': {'netG': netG.state_dict(), 'metric_fc': metric_fc.state_dict()},
+            'optimizer': {'optimizer': optG.state_dict()}}
+    torch.save(state, '%s/state_epoch_%s_%03d.pth' % (args.model_save_file, args.loss, epoch))
 
 
 # data util

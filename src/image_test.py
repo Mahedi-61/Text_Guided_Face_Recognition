@@ -6,12 +6,14 @@ import numpy as np
 import pprint
 import torch
 from torch import nn 
+from tqdm import tqdm 
 
 ROOT_PATH = osp.abspath(osp.join(osp.dirname(osp.abspath(__file__)),  ".."))
 sys.path.insert(0, ROOT_PATH)
 from utils.utils import mkdir_p, merge_args_yaml
-from utils.perpare import get_test_dataloader, prepare_models
+from utils.prepare import get_test_dataloader, prepare_models
 from utils.modules import * 
+
 
 def test(test_dl, model, args):
     device = args.device
@@ -19,6 +21,7 @@ def test(test_dl, model, args):
     preds = []
     labels = []
 
+    loop = tqdm(total = len(test_dl))
     for step, data in enumerate(test_dl, 0):
         img1, img2, cap1, cap2, cap_len1, cap_len2, pair_label  = data
         img1 = img1.to(device).requires_grad_()
@@ -33,9 +36,16 @@ def test(test_dl, model, args):
         preds += pred.data.cpu().tolist()
         labels += pair_label.data.cpu().tolist()
 
-    best_acc, best_th = cal_accuracy(preds, labels)
-    print("accuracy: ", best_acc)
+        # update loop information
+        loop.update(1)
+        loop.set_description(f'Testing')
+        loop.set_postfix()
+
+    loop.close()
     calculate_scores(preds, labels)
+    #best_acc, best_th = cal_accuracy(preds, labels)
+    #print("accuracy: %0.4f thereshold %0.4f" % (best_acc, best_th))
+    
 
 
 def parse_args():
@@ -43,7 +53,7 @@ def parse_args():
     parser = argparse.ArgumentParser(description='ImageRec')
     parser.add_argument('--cfg', 
                         dest='cfg_file', type=str, 
-                        default='./cfg/celeba.yml',
+                        default='./cfg/FE_celeba.yml',
                         help='optional config file')
     parser.add_argument('--train', type=bool, default=False, help='if train model')
     args = parser.parse_args()
@@ -51,16 +61,14 @@ def parse_args():
 
 
 def main(args):
-    # prepare dataloader, models, data
-    args.model_save_file = osp.join(ROOT_PATH, 'saved_models', str(args.dataset_name))
-    mkdir_p(args.model_save_file)
-
     test_dl, test_ds = get_test_dataloader(args)
     args.vocab_size = test_ds.n_words
-    image_encoder, text_encoder, model, netG = prepare_models(args)
+    print("loading models ...")
+    model, netG = prepare_models(args)
   
-    pprint.pprint(args)
-    print("Start Testing")
+    #pprint.pprint(args)
+    print("start testing ...")
+    print("test file: ", args.test_pair_list)
     test(test_dl, model, args)
 
 

@@ -11,8 +11,8 @@ from tqdm import tqdm
 
 ROOT_PATH = osp.abspath(osp.join(osp.dirname(osp.abspath(__file__)),  ".."))
 sys.path.insert(0, ROOT_PATH)
-from utils.utils import merge_args_yaml, mkdir_p
-from utils.perpare import get_train_dataloader, get_test_dataloader
+from utils.utils import merge_args_yaml, mkdir_p, load_full_model_for_image_rec
+from utils.prepare import get_train_dataloader, get_test_dataloader
 from models import resnet, metrics, focal_loss
 from image_test import test 
 
@@ -20,7 +20,7 @@ def parse_args():
     # Training settings
     parser = argparse.ArgumentParser(description='ImgRec')
     parser.add_argument('--cfg', dest='cfg_file', type=str, 
-                        default='./cfg/birds.yml',
+                        default='./cfg/FE_celeba.yml',
                         help='optional config file')
     parser.add_argument('--train', type=bool, default=True, help='if train model')
     args = parser.parse_args()
@@ -41,7 +41,7 @@ def get_model(args):
         model = resnet.resnet50()
 
     model.to(args.device)
-    model = torch.nn.DataParallel(model)
+    model = torch.nn.DataParallel(model, device_ids=args.gpu_id)
     return model 
 
 
@@ -63,7 +63,7 @@ def get_margin(args):
         metric_fc = metrics.MyLinear(512, args.num_classes)
     
     metric_fc.to(args.device)
-    metric_fc = torch.nn.DataParallel(metric_fc)
+    metric_fc = torch.nn.DataParallel(metric_fc, device_ids=args.gpu_id)
     return metric_fc
 
 
@@ -91,13 +91,20 @@ def get_loss(args):
     return criterion
 
 
-def save_model(model, epoch):
+def save_full_model_for_image_rec(model, metric_fc, optimizer, epoch):
     model_file_name = args.backbone + '_' + args.dataset_name + '_' + str(epoch) + '.pth'
-    model_dir = os.path.join(args.checkpoints_path, args.dataset_name)
+    model_dir = os.path.join(args.checkpoints_path, args.dataset_name, args.CONFIG_NAME)
     mkdir_p(model_dir)
     save_name = os.path.join(model_dir, model_file_name)
-    torch.save(model.state_dict(), save_name)
+
+    state = {'full_model': {'model': model.state_dict(), 
+                            'metric_fc': metric_fc.state_dict()}, 
+             'optimizer': {'optimizer': optimizer.state_dict()}}
+
+    torch.save(state, save_name)
     return save_name
+
+
 
 
 def train(train_dl, model, metric_fc, criterion, optimizer, scheduler, args):
@@ -110,6 +117,7 @@ def train(train_dl, model, metric_fc, criterion, optimizer, scheduler, args):
         data_input, caps, cap_len, key, label = data
         data_input = data_input.to(args.device)
         label = label.to(args.device).long()
+        
         feature = model(data_input)
         output = metric_fc(feature, label)
         loss = criterion(output, label)
@@ -125,10 +133,8 @@ def train(train_dl, model, metric_fc, criterion, optimizer, scheduler, args):
 
 
 def main(args):
-    if args.display:
-        visualizer = visualizer.Visualizer()
-
     train_dl, train_ds = get_train_dataloader(args)
+
     args.vocab_size = train_ds.n_words
     print('{} train iters per epoch:'.format(len(train_dl)))
 
@@ -141,36 +147,34 @@ def main(args):
 
     criterion = get_loss(args)
 
-    """
+    
     # load from checkpoint
-    strat_epoch = 1
+    start_epoch = 1
     if args.resume_epoch!=1:
-        strat_epoch = args.resume_epoch+1
-        path = osp.join(args.resume_model_path, 'state_epoch_%03d.pth'%(args.resume_epoch))
-        netG, optimizerG = load_model_opt(netG, optimizerG, path)
-    """
+        print("loading from checkpoint | epoch: ", args.resume_epoch)
+        start_epoch = args.resume_epoch+1
+        model, metric_fc, optimizer = load_full_model_for_image_rec(model, 
+                                metric_fc, optimizer, args.resume_model_path)
+    
 
     #pprint.pprint(args)
     print("Start Training .............. bismillah...............")
-    for epoch in range(args.max_epoch):
+    for epoch in range(start_epoch, args.max_epoch + 1):
         torch.cuda.empty_cache()
         args.current_epoch = epoch
 
         train(train_dl, model, metric_fc, criterion, optimizer, scheduler, args)
         
         # save
-        if epoch % args.save_interval==0 or epoch == args.max_epoch-1:
-            save_model(model, epoch)
+        if epoch % args.save_interval==0 or epoch == args.max_epoch:
+            save_full_model_for_image_rec(model, metric_fc, optimizer, epoch)
         
     
         if ((args.do_test == True) and (epoch % args.test_interval == 0)):
-            print("########### Validation results")
             test_dl, test_ds = get_test_dataloader(args)
             args.vocab_size = test_ds.n_words
 
-            print("Start Testing")
             test(test_dl, model, args)
-        
 
 
 if __name__ == "__main__":

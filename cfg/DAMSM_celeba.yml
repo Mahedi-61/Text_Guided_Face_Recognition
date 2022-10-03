@@ -1,5 +1,5 @@
-CONFIG_NAME: 'DAMSM'
-dataset_name: 'celeba'
+CONFIG_NAME: DAMSM
+dataset_name: celeba
 data_dir: ./data/celeba
 
 num_workers: 2 
@@ -18,7 +18,7 @@ test_interval: 4
 save_interval: 4
 
 
-RNN_TYPE: LSTM #GRU  
+rnn_type: LSTM #GRU  
 TRAIN:
     FLAG: True
     NET_E: '' 

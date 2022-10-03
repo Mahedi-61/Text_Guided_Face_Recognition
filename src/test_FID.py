@@ -81,6 +81,7 @@ def main(args):
         print('Sampling done, %.2fs cost, The FID is : %.2f'%(end_t-start_t, fid))
  
 
+
 if __name__ == "__main__":
     args = merge_args_yaml(parse_args())
     # set seed

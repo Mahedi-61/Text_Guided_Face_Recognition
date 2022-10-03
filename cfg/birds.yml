@@ -1,4 +1,4 @@
-CONFIG_NAME: birds
+CONFIG_NAME: FE
 dataset_name: birds
 data_dir: ./data/birds
 
@@ -48,7 +48,7 @@ checkpoints_path: ./checkpoints
 load_model_path: ./weights/birds/resnet18_birds_60.pth
 resume_model_path: ./saved_models/birds
 resume_epoch: 1
-
+rnn_type: LSTM #GRU 
 do_test: True
 
 TEXT:

@@ -21,7 +21,7 @@ class RNN_ENCODER(nn.Module):
         self.drop_prob = drop_prob  # probability of an element to be zeroed
         self.nlayers = nlayers  # number of recurrent layers
         self.bidirectional = bidirectional
-        self.rnn_type = args.RNN_TYPE
+        self.rnn_type = args.rnn_type
         if bidirectional:
             self.num_directions = 2
         else:

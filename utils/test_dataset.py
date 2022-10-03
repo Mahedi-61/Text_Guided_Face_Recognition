@@ -26,26 +26,20 @@ def prepare_test_data(data, text_encoder):
     return img1, img2, sent_emb1, sent_emb2, pair_label 
 
 
-
 ################################################################
 #                    Test Dataset
 ################################################################
 class TextImgTestDataset(data.Dataset):
     def __init__(self, transform=None, args=None):
-        print("############## Loading test dataset ##################")
         self.split= "test"
         self.transform = transform
         self.word_num = args.TEXT.WORDS_NUM
         self.embeddings_num = args.TEXT.CAPTIONS_PER_IMAGE
         self.data_dir = args.data_dir
         self.dataset_name = args.dataset_name
-
-        self.norm = transforms.Compose([
-            transforms.ToTensor(),
-            transforms.Normalize((0.5), (0.5))])
         
         if self.data_dir.find('birds') != -1:
-            self.bbox = load_bbox(self.data_dir)
+            self.bbox = load_bbox(self.data_dir, self.split)
         else:
             self.bbox = None
 
@@ -55,8 +49,9 @@ class TextImgTestDataset(data.Dataset):
         self.class_id = load_class_id(os.path.join(self.data_dir, self.split))
 
         self.test_pair_list = args.test_pair_list
+        self.config = args.CONFIG_NAME
         self.imgs_pair, self.pair_label = self.get_test_list()
-
+        
 
     def get_test_list(self):
         with open(self.test_pair_list, 'r') as fd:
@@ -103,8 +98,8 @@ class TextImgTestDataset(data.Dataset):
         elif self.dataset_name == "celeba":
             data_dir = os.path.join(self.data_dir, "celeba")
 
-        img1_name = '%s/images/%s' % (data_dir, imgs[0])
-        img2_name = '%s/images/%s' % (data_dir, imgs[1])
+        img1_name = '%s/test_images/%s' % (data_dir, imgs[0])
+        img2_name = '%s/test_images/%s' % (data_dir, imgs[1])
 
         key1 = imgs[0][:-4]
         key2 = imgs[1][:-4]
@@ -116,8 +111,8 @@ class TextImgTestDataset(data.Dataset):
             bbox1 = None
             bbox2 = None 
 
-        img1 = get_imgs(img1_name, bbox1, self.transform, normalize=self.norm)
-        img2 = get_imgs(img2_name, bbox2, self.transform, normalize=self.norm)
+        img1 = get_imgs(img1_name, self.config, bbox1, self.transform)
+        img2 = get_imgs(img2_name, self.config, bbox2, self.transform)
 
         real_index1 = self.filenames.index(key1)
         real_index2 = self.filenames.index(key2)

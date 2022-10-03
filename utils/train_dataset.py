@@ -46,11 +46,11 @@ class TextImgTrainDataset(data.Dataset):
         self.split = "train"
         
         if self.data_dir.find('birds') != -1:
-            self.bbox = load_bbox(self.data_dir)
+            self.bbox = load_bbox(self.data_dir, self.split)
         else:
             self.bbox = None
-        split_dir = os.path.join(self.data_dir, self.split)
 
+        split_dir = os.path.join(self.data_dir, self.split)
         self.filenames, self.captions, self.ixtoword, self.wordtoix, self.n_words = \
                     load_text_data(self.data_dir, self.split, self.embeddings_num)
 
@@ -92,14 +92,15 @@ class TextImgTrainDataset(data.Dataset):
         else:
             bbox = None
 
-        if self.dataset_name.find('birds') != -1:
-                img_name = '%s/CUB_200_2011/images/%s.jpg' % (data_dir, key)
+        if self.dataset_name == "birds":
+            data_dir = os.path.join(self.data_dir, "CUB_200_2011")
+            img_extension = ".jpg"
 
-        elif self.dataset_name.find('celeba') != -1:
-                img_name = '%s/celeba/images/%s.png' % (data_dir, key)
-        else:
-            img_name = '%s/images/%s.jpg' % (data_dir, key)
+        elif self.dataset_name == "celeba":
+            data_dir = os.path.join(self.data_dir, "celeba")
+            img_extension = ".png"
 
+        img_name = "%s/train_images/%s%s" % (data_dir, key, img_extension)
         imgs = get_imgs(img_name, self.config, bbox, self.transform)
 
         # random select a sentence

@@ -9,14 +9,14 @@ import torchvision.utils as vutils
 from utils.train_dataset import TextImgTrainDataset
 from utils.test_dataset import TextImgTestDataset 
 
-from utils.utils import load_model_weights
+from utils.utils import load_model_weights, load_only_model_for_image_rec
 from models.DAMSM import RNN_ENCODER, CNN_ENCODER
 from models.GAN import NetG
 from models.resnet import resnet_face18 
 
 
 ###########   preparation   ############
-def prepare_models(args):
+def prepare_image_encoder(args):
     device = args.device
     
     # image encoder
@@ -24,11 +24,16 @@ def prepare_models(args):
     img_encoder_path = args.TEXT.DAMSM_NAME.replace('text_encoder', 'image_encoder')
     state_dict = torch.load(img_encoder_path, map_location='cpu')
     image_encoder = load_model_weights(image_encoder, state_dict)
-    # image_encoder.load_state_dict(state_dict)
     image_encoder.to(device)
+
     for p in image_encoder.parameters():
         p.requires_grad = False
     image_encoder.eval()
+    return image_encoder
+
+
+def prepare_text_encoder(args):
+    device = args.device
 
     # text encoder
     print("loading text encoder")
@@ -36,15 +41,22 @@ def prepare_models(args):
     state_dict = torch.load(args.TEXT.DAMSM_NAME, map_location='cpu')
     text_encoder = load_model_weights(text_encoder, state_dict)
     text_encoder.cuda()
+
     for p in text_encoder.parameters():
         p.requires_grad = False
     text_encoder.eval()
+    return text_encoder
 
+
+
+def prepare_models(args):
+    device = args.device
 
     #archface model for image
     model = resnet_face18(use_se=args.use_se)
     model = torch.nn.DataParallel(model, device_ids=args.gpu_id)
-    model.load_state_dict(torch.load(args.load_model_path))
+    #model.load_state_dict(torch.load(args.load_model_path))
+    model = load_only_model_for_image_rec(model, args.load_model_path, args.prev_weight)
     model.to(device)
 
     for p in model.parameters():
@@ -54,8 +66,7 @@ def prepare_models(args):
     # GAN models
     netG = NetG(num_classes = args.num_classes)
     netG = torch.nn.DataParallel(netG, device_ids=args.gpu_id).to(device)
-                                                          
-    return image_encoder, text_encoder, model, netG
+    return model, netG
 
 
 def prepare_dataset(args, split, transform):

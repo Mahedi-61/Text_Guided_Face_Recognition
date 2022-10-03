@@ -24,7 +24,7 @@ sys.path.insert(0, ROOT_PATH)
 from utils.utils import mkdir_p, merge_args_yaml
 from models.losses import sent_loss, words_loss
 
-from utils.perpare import get_train_dataloader, get_test_dataloader
+from utils.prepare import get_train_dataloader, get_test_dataloader
 from utils.train_dataset import prepare_train_data_for_DAMSM
 
 from models.DAMSM import RNN_ENCODER, CNN_ENCODER
@@ -164,7 +164,7 @@ def build_models(args):
 
     if args.CUDA:
         text_encoder = text_encoder.cuda()
-        image_encoder = nn.DataParallel(image_encoder).cuda()
+        image_encoder = nn.DataParallel(image_encoder, device_ids=args.gpu_id).cuda()
         labels = labels.cuda()
 
     return text_encoder, image_encoder, labels, start_epoch

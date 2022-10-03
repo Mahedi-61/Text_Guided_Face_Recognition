@@ -163,7 +163,8 @@ class MyLinear(nn.Module):
     def __init__(self, hidden, cls_num):
         super().__init__()
         self.output = nn.Linear(hidden, cls_num)
+        self.relu = nn.ReLU(inplace=True)
         
     def forward(self, x, label):
-        x = self.output(x)
+        x = self.output(self.relu(x))
         return x
