@@ -33,11 +33,13 @@ def cal_accuracy(y_score, y_true):
 
 def get_features(model, imgs):
     img_features = model(imgs)
+    """
     flip_imgs = torch.squeeze(imgs, 1)
     a = torch.stack([torch.fliplr(flip_imgs[i]) for i in range(0, flip_imgs.size(0))])
     flip_img_features = model(a.unsqueeze(dim=1))
     img_features = torch.cat((img_features, flip_img_features), dim=1)
     del flip_img_features
+    """ 
     return img_features
 
 
@@ -87,23 +89,6 @@ def test(test_dl, model, netG, text_encoder, args):
     best_acc, best_th = cal_accuracy(preds, labels)
     calculate_scores(preds, labels)
     print("accuracy: %0.4f; threshold %0.4f" %(best_acc, best_th))
-
-
-def save_single_imgs(imgs, save_dir, time, dl_len, batch_n, batch_size):
-    for j in range(batch_size):
-        folder = save_dir
-        if not os.path.isdir(folder):
-            #print('Make a new folder: ', folder)
-            mkdir_p(folder)
-        im = imgs[j].data.cpu().numpy()
-        # [-1, 1] --> [0, 255]
-        im = (im + 1.0) * 127.5
-        im = im.astype(np.uint8)
-        im = np.transpose(im, (1, 2, 0))
-        im = Image.fromarray(im)
-        filename = 'imgs_n%06d_gpu%1d.png'%(time*dl_len+batch_size*batch_n+j, get_rank())
-        fullpath = osp.join(folder, filename)
-        im.save(fullpath)
 
 
 

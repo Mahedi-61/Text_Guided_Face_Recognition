@@ -143,6 +143,44 @@ def get_G_in_out_chs(nf, imsize):
     return in_out_pairs
 
 
+
+class MHSA(nn.Module):
+  def __init__(self,
+         emb_dim,
+         kqv_dim,
+         num_heads=1):
+    super(MHSA, self).__init__()
+    self.emb_dim = emb_dim
+    self.kqv_dim = kqv_dim
+    self.num_heads = num_heads
+
+    self.w_k = nn.Linear(emb_dim, kqv_dim * num_heads, bias=False)
+    self.w_q = nn.Linear(emb_dim, kqv_dim * num_heads, bias=False)
+    self.w_v = nn.Linear(emb_dim, kqv_dim * num_heads, bias=False)
+    self.w_out = nn.Linear(kqv_dim * num_heads, emb_dim)
+
+  def forward(self, x):
+
+    b, t, _ = x.shape
+    e = self.kqv_dim
+    h = self.num_heads
+    keys = self.w_k(x).view(b, t, h, e)
+    values = self.w_v(x).view(b, t, h, e)
+    queries = self.w_q(x).view(b, t, h, e)
+
+    keys = keys.transpose(2, 1)
+    queries = queries.transpose(2, 1)
+    values = values.transpose(2, 1)
+
+    dot = queries @ keys.transpose(3, 2)
+    dot = dot / np.sqrt(e)
+    dot = F.softmax(dot, dim=3)
+
+    out = dot @ values
+    out = out.transpose(1,2).contiguous().view(b, t, h * e)
+    out = self.w_out(out)
+    return out
+
 if __name__ == "__main__":
     print("Bismillah")
     model = NetG(num_classes=200)

@@ -2,9 +2,6 @@ import torch
 import torch.nn as nn
 import numpy as np
 import torch.nn.functional as F
-import torchvision.models as models
-
-
 from models.attention import func_attention
 
 # ##################Loss for matching text-image###################
@@ -17,21 +14,26 @@ def cosine_similarity(x1, x2, dim=1, eps=1e-8):
 
 
 def sent_loss(cnn_code, rnn_code, labels, class_ids, batch_size, args, eps=1e-8):
+    # ### Mask mis-match samples  ###
+    # that come from the same class as the real sample ###
     masks = []
     if class_ids is not None:
         for i in range(batch_size):
-            mask = (class_ids == class_ids[i]).astype(np.uint8)
+            mask = (class_ids == class_ids[i]).astype(np.bool)
             mask[i] = 0
             masks.append(mask.reshape((1, -1)))
         masks = np.concatenate(masks, 0)
-        masks = torch.ByteTensor(masks)
+        # masks: batch_size x batch_size
+        masks = torch.BoolTensor(masks)
         if args.CUDA:
             masks = masks.cuda()
 
+    # --> seq_len x batch_size x nef
     if cnn_code.dim() == 2:
         cnn_code = cnn_code.unsqueeze(0)
         rnn_code = rnn_code.unsqueeze(0)
 
+    # cnn_code_norm / rnn_code_norm: seq_len x batch_size x 1
     cnn_code_norm = torch.norm(cnn_code, 2, dim=2, keepdim=True)
     rnn_code_norm = torch.norm(rnn_code, 2, dim=2, keepdim=True)
 
@@ -63,21 +65,33 @@ def words_loss(img_features, words_emb, labels, cap_lens, class_ids, batch_size,
     masks = []
     att_maps = []
     similarities = []
-    cap_lens = cap_lens.data.tolist()
+
+    if args.using_BERT == False:
+        cap_lens = cap_lens.data.tolist()
 
     for i in range(batch_size):
         if class_ids is not None:
-            mask = (class_ids == class_ids[i]).astype(np.uint8)
+            mask = (class_ids == class_ids[i]).astype(np.bool)
             mask[i] = 0
             masks.append(mask.reshape((1, -1)))
 
         # Get the i-th text description
-        words_num = cap_lens[i]
+        if args.using_BERT == False: words_num = cap_lens[i]
+        elif args.using_BERT: words_num = args.bert_words_num 
+
         word = words_emb[i, :, :words_num].unsqueeze(0).contiguous()
+
         word = word.repeat(batch_size, 1, 1)
         context = img_features
-        weiContext, attn = func_attention(word, context, args.TRAIN.SMOOTH.GAMMA1)
 
+        """
+            word(query): batch x nef x words_num
+            context: batch x nef x 17 x 17
+            weiContext: batch x nef x words_num
+            attn: batch x words_num x 17 x 17
+        """
+
+        weiContext, attn = func_attention(word, context, args.TRAIN.SMOOTH.GAMMA1)
         att_maps.append(attn[i].unsqueeze(0).contiguous())
         word = word.transpose(1, 2).contiguous()
         weiContext = weiContext.transpose(1, 2).contiguous()
@@ -94,10 +108,11 @@ def words_loss(img_features, words_emb, labels, cap_lens, class_ids, batch_size,
 
         similarities.append(row_sim)
 
+    # batch_size x batch_size
     similarities = torch.cat(similarities, 1)
     if class_ids is not None:
         masks = np.concatenate(masks, 0)
-        masks = torch.ByteTensor(masks)
+        masks = torch.BoolTensor(masks)
         if args.CUDA:
             masks = masks.cuda()
 
@@ -113,6 +128,7 @@ def words_loss(img_features, words_emb, labels, cap_lens, class_ids, batch_size,
     else:
         loss0, loss1 = None, None
     return loss0, loss1, att_maps
+
 
 
 

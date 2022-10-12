@@ -30,7 +30,8 @@ def prepare_test_data(data, text_encoder):
 #                    Test Dataset
 ################################################################
 class TextImgTestDataset(data.Dataset):
-    def __init__(self, transform=None, args=None):
+    def __init__(self, filenames, captions, att_masks, ixtoword=None, wordtoix=None, 
+                    n_words=None, transform=None, args=None):
         self.split= "test"
         self.transform = transform
         self.word_num = args.TEXT.WORDS_NUM
@@ -43,11 +44,20 @@ class TextImgTestDataset(data.Dataset):
         else:
             self.bbox = None
 
-        self.filenames, self.captions, self.ixtoword, self.wordtoix, self.n_words = \
-                        load_text_data(self.data_dir, self.split, self.embeddings_num)
+        self.using_BERT = args.using_BERT 
+        if args.using_BERT == True: 
+            self.filenames = filenames
+            self.captions = captions 
+            self.att_masks = att_masks
+
+        elif args.using_BERT == False:
+            self.filenames = filenames
+            self.captions = captions 
+            self.ixtoword = ixtoword
+            self.wordtoix = wordtoix
+            self.n_words = n_words
 
         self.class_id = load_class_id(os.path.join(self.data_dir, self.split))
-
         self.test_pair_list = args.test_pair_list
         self.config = args.CONFIG_NAME
         self.imgs_pair, self.pair_label = self.get_test_list()
@@ -117,15 +127,24 @@ class TextImgTestDataset(data.Dataset):
         real_index1 = self.filenames.index(key1)
         real_index2 = self.filenames.index(key2)
 
-        # random select a sentence
-        sent_ix = random.randint(0, self.embeddings_num)
-        new_sent_ix1 = real_index1 * self.embeddings_num + sent_ix
-        cap1, cap_len1 = self.get_caption(new_sent_ix1)
+        # randomly select a sentence
+        sent_ix1 = random.randint(0, self.embeddings_num)
+        new_sent_ix1 = real_index1 * self.embeddings_num + sent_ix1
+        
+        # randomly select another sentence
+        sent_ix2 = random.randint(0, self.embeddings_num)
+        new_sent_ix2 = real_index2 * self.embeddings_num + sent_ix2
+        
 
-        new_sent_ix2 = real_index2 * self.embeddings_num + sent_ix
-        cap2, cap_len2 = self.get_caption(new_sent_ix2)
+        if self.using_BERT == True: 
+            cap1, mask1 = self.captions[new_sent_ix1], self.att_masks[new_sent_ix1]
+            cap2, mask2 = self.captions[new_sent_ix2], self.att_masks[new_sent_ix2]
+            return img1, img2, cap1, cap2, mask1, mask2, pair_label
 
-        return img1, img2, cap1, cap2, cap_len1, cap_len2, pair_label
+        elif self.using_BERT == False:
+            cap1, cap_len1 = self.get_caption(new_sent_ix1) 
+            cap2, cap_len2 = self.get_caption(new_sent_ix2)
+            return img1, img2, cap1, cap2, cap_len1, cap_len2, pair_label
 
 
     def __len__(self):

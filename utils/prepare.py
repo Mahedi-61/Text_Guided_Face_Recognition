@@ -1,11 +1,7 @@
 import os.path as osp
-from PIL import Image
 
 import torch
 import torchvision.transforms as transforms
-import torchvision.utils as vutils
-
-
 from utils.train_dataset import TextImgTrainDataset
 from utils.test_dataset import TextImgTestDataset 
 
@@ -13,7 +9,7 @@ from utils.utils import load_model_weights, load_only_model_for_image_rec
 from models.DAMSM import RNN_ENCODER, CNN_ENCODER
 from models.GAN import NetG
 from models.resnet import resnet_face18 
-
+from utils.dataset_utils import load_text_data, load_text_data_Bert
 
 ###########   preparation   ############
 def prepare_image_encoder(args):
@@ -55,7 +51,6 @@ def prepare_models(args):
     #archface model for image
     model = resnet_face18(use_se=args.use_se)
     model = torch.nn.DataParallel(model, device_ids=args.gpu_id)
-    #model.load_state_dict(torch.load(args.load_model_path))
     model = load_only_model_for_image_rec(model, args.load_model_path, args.prev_weight)
     model.to(device)
 
@@ -69,48 +64,79 @@ def prepare_models(args):
     return model, netG
 
 
-def prepare_dataset(args, split, transform):
-    imsize = args.imsize
+def prepare_dataloader(args, split, transform):
+    imsize = args.img_size
     if transform is not None:
         image_transform = transform
 
     else:
-        if (split == "train"):
+        if (split == "train") :
             image_transform = transforms.Compose([
-                transforms.Resize(144),
+                #transforms.Resize(144),
                 transforms.RandomCrop(imsize),
                 transforms.RandomHorizontalFlip()])
 
         elif (split == "test"):
             image_transform = transforms.Compose([
-                transforms.Resize(144),
+                #transforms.Resize(144),
                 transforms.RandomCrop(imsize)])
 
+    if args.using_BERT == True: 
+        train_filenames, train_captions, train_att_masks, \
+        test_filenames, test_captions, test_att_masks =  load_text_data_Bert(args.data_dir, args)
+        if (split == "train"):
+            train_ds = TextImgTrainDataset(train_filenames, train_captions, train_att_masks, 
+                                    transform=image_transform, split="train", args=args)
+
+
+            valid_ds = TextImgTrainDataset(test_filenames, test_captions, test_att_masks, 
+                            transform=image_transform, split="valid", args=args)
+
+        elif (split == "test"):
+            test_ds =  TextImgTestDataset(test_filenames, test_captions, test_att_masks, 
+                                        transform=image_transform, args=args)
+
+
+    elif args.using_BERT == False:
+        train_names, train_captions, test_names, test_captions, ixtoword, wordtoix, n_words = \
+                            load_text_data(args.data_dir, args.embeddings_num)
+
+        if (split == "train"):
+            train_ds = TextImgTrainDataset(train_names, train_captions, None, ixtoword, wordtoix, n_words,
+                            transform=image_transform, split="train", args=args)
+
+
+            valid_ds = TextImgTrainDataset(test_names, test_captions, None, ixtoword, wordtoix, n_words,
+                            transform=image_transform, split="valid", args=args)
+
+        elif (split == "test"):
+            test_ds =  TextImgTestDataset(test_names, test_captions, None, ixtoword, wordtoix, n_words,
+                                        transform=image_transform, args=args)
+
+
     if (split == "train"):
-        return TextImgTrainDataset(transform=image_transform, args=args)
+        train_dl = torch.utils.data.DataLoader(
+            train_ds, 
+            batch_size=args.train_batch_size, 
+            drop_last=True,
+            num_workers=args.num_workers, 
+            shuffle=True)
+
+        valid_dl = torch.utils.data.DataLoader(
+            valid_ds, 
+            batch_size=args.test_batch_size, 
+            drop_last=True,
+            num_workers=args.num_workers, 
+            shuffle=True)
+
+        return train_dl, train_ds, valid_dl, valid_ds 
+
 
     elif (split == "test"):
-        return TextImgTestDataset(transform=image_transform, args=args)
-
-
-def get_train_dataloader(args, transform=None):
-    train_dataset = prepare_dataset(args, split='train', transform=transform)
-    
-    train_dataloader = torch.utils.data.DataLoader(
-        train_dataset, 
-        batch_size=args.train_batch_size, 
-        drop_last=True,
-        num_workers=args.num_workers, 
-        shuffle=True)
-    return train_dataloader, train_dataset
-
-
-def get_test_dataloader(args, transform=None):
-    test_dataset = prepare_dataset(args, split='test', transform=transform)
-    test_dataloader = torch.utils.data.DataLoader(
-            test_dataset, 
+        test_dl = torch.utils.data.DataLoader(
+            test_ds, 
             batch_size=args.test_batch_size, 
             num_workers=args.num_workers, 
             shuffle=False)
 
-    return test_dataloader, test_dataset
+        return test_dl, test_ds

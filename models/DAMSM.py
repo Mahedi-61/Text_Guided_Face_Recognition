@@ -1,3 +1,6 @@
+from email.mime import image
+import sys 
+import os.path as osp 
 import torch
 import torch.nn as nn
 import torch.nn.parallel
@@ -6,6 +9,52 @@ from torchvision import models
 import torch.utils.model_zoo as model_zoo
 import torch.nn.functional as F
 from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
+from transformers import BertModel, BertConfig
+#from transformers import AutoModel, AutoConfig
+
+ROOT_PATH = osp.abspath(osp.join(osp.dirname(osp.abspath(__file__)),  ".."))
+sys.path.insert(0, ROOT_PATH)
+from models.resnet import ResNetFace, IRBlock
+"""
+    hidden_size = 768, 
+    num_hidden_layers = 3,
+    num_attention_heads = 12,
+    intermediate_size = 3072,
+    hidden_dropout_prob=args.hidden_dropout_prob,
+"""
+
+def get_CLS_embedding(layer):
+    return layer[:, 0, :]
+
+
+class BERT_ENCODER(nn.Module):
+    def __init__(self, args):
+        super(BERT_ENCODER, self).__init__()
+        self.num_bert_layer = args.num_bert_layer
+        config = BertConfig.from_pretrained(args.bert_config, 
+                            output_hidden_states = True)
+
+        self.model = BertModel.from_pretrained(args.bert_config, config=config)
+        self.sentence_feat = nn.Linear(768, 256)
+        self.dropout = nn.Dropout(0.3)
+        self.word_feat = nn.Linear(768, 256)
+
+    def forward(self, captions, mask):
+        outputs = self.model(captions, attention_mask=mask)
+
+        ### Sentence features
+        # outputs -> (last_hidden_state, pooler_output, hidden_states)
+        # hidden_states -> tuple of lenght 13
+        # another way to calculate sentece features
+        # sent_feat = (word_feat * mask.unsqueeze(-1)).sum(1) / mask.sum(1).unsqueeze(-1)
+        embeddings = outputs[2][1:]
+        cls_embeddings = [get_CLS_embedding(embeddings[i]) for i in range(self.num_bert_layer)]
+        sent_emb = torch.mean(torch.stack(cls_embeddings, dim=1), dim=1) #batch_size x 768
+        sent_emb = self.sentence_feat(self.dropout(sent_emb)) #batch_size x 256
+
+        words_emb = self.word_feat(outputs[0])
+        words_emb = words_emb.transpose(1, 2)
+        return words_emb, sent_emb
 
 
 
@@ -49,6 +98,9 @@ class RNN_ENCODER(nn.Module):
                               bidirectional=self.bidirectional)
         else:
             raise NotImplementedError
+
+        self.rnn.flatten_parameters() 
+
 
     def init_weights(self):
         initrange = 0.1
@@ -100,10 +152,73 @@ def conv1x1(in_planes, out_planes, bias=False):
                      padding=0, bias=bias)
 
 
+
+class ResNetFace_ENCODER(nn.Module):
+    def __init__(self, args):
+        super(ResNetFace_ENCODER, self).__init__()
+        #if args.using_BERT == True: self.nef = 768
+        #elif args.using_BERT == False:  self.nef = 256 
+        self.nef = 256 
+        model_path = "weights/celeba/FE/resnet18_celeba_110.pth"
+        model = ResNetFace(IRBlock, [2, 2, 2, 2], use_se= False)
+        
+        weights = torch.load(model_path)
+        state_dict = {
+                key[7:]: value
+                for key, value in weights.items()
+            }
+        model.load_state_dict(state_dict)
+
+        for param in model.parameters():
+            param.requires_grad = False
+        print('Load pretrained model from ', model_path)
+
+        self.define_module(model)
+
+    def define_module(self, model):
+        self.conv1 = model.conv1
+        self.bn1 = model.bn1
+        self.prelu = model.prelu
+        self.maxpool = model.maxpool
+        self.layer1 = model.layer1
+        self.layer2 = model.layer2
+        self.layer3 = model.layer3
+        self.layer4 = model.layer4
+        self.bn4 = model.bn4
+        self.dropout = model.dropout
+        self.fc5 = model.fc5
+        self.bn5 = model.bn5
+
+        self.emb_features = conv1x1(768, self.nef)
+        self.emb_cnn_code = nn.Linear(512, self.nef)
+
+    def forward(self, x):
+        x = self.conv1(x)
+        x = self.bn1(x)
+        x = self.prelu(x)
+        x = self.maxpool(x)
+
+        x = self.layer1(x)
+        x = self.layer2(x)
+        x = self.layer3(x)
+        features = x #.permute(0, 2, 3, 1)
+
+        x = self.layer4(x)
+        x = self.bn4(x)
+        x = self.dropout(x)
+        x = x.view(x.size(0), -1)
+        x = self.fc5(x)
+        x = self.bn5(x)
+
+        x = self.emb_cnn_code(self.prelu(x))
+        return features, x
+
+
 class CNN_ENCODER(nn.Module):
-    def __init__(self):
+    def __init__(self, args):
         super(CNN_ENCODER, self).__init__()
-        self.nef = 256  # define a uniform ranker
+        if args.using_BERT == True: self.nef = 768
+        elif args.using_BERT == False:  self.nef = 256 
 
         model = models.inception_v3()
         url = 'https://download.pytorch.org/models/inception_v3_google-1a9a5a14.pth'
@@ -206,5 +321,8 @@ class CNN_ENCODER(nn.Module):
 
 
 if __name__ == "__main__":
-    rnn = RNN_ENCODER(5450)
-    print(rnn)
+    image_encoder = ResNetFace_ENCODER()
+    x = torch.randn((4, 1, 128, 128))
+    features, cnn_code = image_encoder(x)
+    print(features.shape)
+    print(cnn_code.shape)

@@ -5,7 +5,6 @@ data_dir: ./data/celeba
 num_workers: 2 
 gpu_id: [0, 1]
 imsize: 128
-cond_dim: 256
 manual_seed: 100
 cuda: True
 
@@ -33,21 +32,19 @@ nf: 32
 ch_size: 1
 input_shape: (1, 128, 128)
 display: False
-finetune: False
-
-model: base
 test_interval: 3
 save_interval: 3
 
 test_pair_list: ./data/celeba/celeba/celeba_valid_pair.txt  
 checkpoints_path: ./checkpoints
 load_model_path: ./weights/celeba/FE/resnet18_celeba_5.pth
-resume_model_path: ./checkpoints/celeba/state_epoch_focal_loss_002.pth
+resume_model_path: ./checkpoints/celeba/state_epoch_focal_loss_015.pth
 resume_epoch: 1
 
 prev_weight: False
 do_test: True
 rnn_type: LSTM #GRU 
+using_BERT: True   
 
 TEXT:
     WORDS_NUM: 18

@@ -18,7 +18,7 @@ from image_test import test
 
 def parse_args():
     # Training settings
-    parser = argparse.ArgumentParser(description='ImgRec')
+    parser = argparse.ArgumentParser(description='Feature Extraction')
     parser.add_argument('--cfg', dest='cfg_file', type=str, 
                         default='./cfg/FE_celeba.yml',
                         help='optional config file')
@@ -129,6 +129,7 @@ def train(train_dl, model, metric_fc, criterion, optimizer, scheduler, args):
     print("loss {:0.4f}".format(loss.item()))
     scheduler.step()
     loop.close()
+    print("learning rate: ", scheduler.get_last_lr())
 
 
 
@@ -143,7 +144,7 @@ def main(args):
     optimizer = get_optimizer(args, model, metric_fc)
     scheduler = torch.optim.lr_scheduler.StepLR(optimizer, 
                                     step_size=args.lr_step, 
-                                    gamma=0.1)
+                                    gamma=0.5)
 
     criterion = get_loss(args)
 

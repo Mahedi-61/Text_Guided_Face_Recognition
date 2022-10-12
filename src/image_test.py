@@ -40,7 +40,8 @@ def test(test_dl, model, args):
         loop.update(1)
         loop.set_description(f'Testing')
         loop.set_postfix()
-
+        
+    print(out2.shape)
     loop.close()
     calculate_scores(preds, labels)
     #best_acc, best_th = cal_accuracy(preds, labels)

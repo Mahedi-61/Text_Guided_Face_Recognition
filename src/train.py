@@ -1,3 +1,4 @@
+from os import pread
 import sys
 import os.path as osp
 import random
@@ -12,9 +13,9 @@ ROOT_PATH = osp.abspath(osp.join(osp.dirname(osp.abspath(__file__)),  ".."))
 sys.path.insert(0, ROOT_PATH)
 from utils.utils import mkdir_p, merge_args_yaml
 from utils.utils import save_models, load_model_opt 
-from utils.prepare import get_train_dataloader, get_test_dataloader, prepare_text_encoder, prepare_models
+from utils.prepare import prepare_dataloader, prepare_text_encoder, prepare_models
 from utils.modules import test, get_features  
-from utils.train_dataset import prepare_train_data
+from utils.train_dataset import get_one_batch_data, prepare_train_data, get_one_batch_data_Bert
 from models import metrics, focal_loss
 
 def parse_args():
@@ -110,11 +111,15 @@ def main(args):
     args.model_save_file = osp.join(args.checkpoints_path, str(args.dataset_name))
     mkdir_p(args.model_save_file)
 
-    train_dl, train_ds = get_train_dataloader(args)
-    test_dl, test_ds = get_test_dataloader(args)
+    train_dl, train_ds, valid_dl, valid_ds = prepare_dataloader(args, split="train", transform=None)
+    #test_dl, test_ds = get_test_dataloader(args)
 
+    get_one_batch_data_Bert(train_dl)
+
+    """
     args.vocab_size = train_ds.n_words
     text_encoder = prepare_text_encoder(args)
+    
     model, netG = prepare_models(args)
     metric_fc = get_margin(args)
 
@@ -149,7 +154,7 @@ def main(args):
         if ((args.do_test == True) and (epoch % args.test_interval == 0)):
             print("Let's test the model")
             test(test_dl, model, netG, text_encoder, args)
-
+    """
 
 if __name__ == "__main__":
     args = merge_args_yaml(parse_args())

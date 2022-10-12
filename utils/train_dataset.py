@@ -6,7 +6,7 @@ from utils.dataset_utils import *
 import os
 import numpy as np
 import numpy.random as random
-import pickle
+
 
 
 def get_one_batch_data(dataloader, text_encoder, args):
@@ -35,25 +35,57 @@ def prepare_train_data_for_DAMSM(data, text_encoder):
     return imgs, sent_emb, words_embs, keys, cls_ids, caption_lens
 
 
+
+####################### for BERT ################################
+def prepare_train_data_for_Bert(data, text_encoder):
+    imgs, caps, masks, keys, cls_ids = data
+    sent_emb, words_embs = encode_Bert_tokens(text_encoder, caps, masks)
+    imgs = Variable(imgs).cuda()
+    return imgs, sent_emb, words_embs, keys, cls_ids
+
+
+def get_one_batch_data_Bert(dataloader):
+    data = next(iter(dataloader))
+    imgs, sent_emb, words_emb, keys, cls_ids = prepare_train_data_for_Bert(data)
+    return imgs, words_emb, sent_emb
+
+
 class TextImgTrainDataset(data.Dataset):
-    def __init__(self, transform=None, args=None):
-        print("############## Loading train dataset ##################")
+    def __init__(self, filenames, captions, att_masks, ixtoword=None, wordtoix=None, 
+                    n_words=None, transform=None, split="train", args=None):
+
+        print("############## Loading %s dataset ################" % split)
         self.transform = transform
         self.word_num = args.TEXT.WORDS_NUM
         self.embeddings_num = args.TEXT.CAPTIONS_PER_IMAGE
         self.data_dir = args.data_dir
         self.dataset_name = args.dataset_name
-        self.split = "train"
+        self.using_BERT = args.using_BERT
         
+        if split == "train":
+            self.split = split 
+
+        elif split == "valid":
+            self.split = "test"
+
         if self.data_dir.find('birds') != -1:
             self.bbox = load_bbox(self.data_dir, self.split)
         else:
             self.bbox = None
 
-        split_dir = os.path.join(self.data_dir, self.split)
-        self.filenames, self.captions, self.ixtoword, self.wordtoix, self.n_words = \
-                    load_text_data(self.data_dir, self.split, self.embeddings_num)
+        if args.using_BERT == True: 
+            self.filenames = filenames
+            self.captions = captions 
+            self.att_masks = att_masks
 
+        elif args.using_BERT == False:
+            self.filenames = filenames
+            self.captions = captions 
+            self.ixtoword = ixtoword
+            self.wordtoix = wordtoix
+            self.n_words = n_words
+
+        split_dir = os.path.join(self.data_dir, self.split)
         self.class_id = load_class_id(split_dir)
         self.config = args.CONFIG_NAME
 
@@ -100,14 +132,27 @@ class TextImgTrainDataset(data.Dataset):
             data_dir = os.path.join(self.data_dir, "celeba")
             img_extension = ".png"
 
-        img_name = "%s/train_images/%s%s" % (data_dir, key, img_extension)
+        if self.config == "DAMSM":
+            if self.split == "train": img_folder = "train_images_DAMSM"
+            elif self.split == "test": img_folder = "test_images_DAMSM"
+
+        else:
+            img_folder = "train_images"
+
+        img_name = "%s/%s/%s%s" % (data_dir, img_folder, key, img_extension)
         imgs = get_imgs(img_name, self.config, bbox, self.transform)
 
         # random select a sentence
         sent_ix = random.randint(0, self.embeddings_num)
         new_sent_ix = index * self.embeddings_num + sent_ix
-        caps, cap_len = self.get_caption(new_sent_ix)
-        return imgs, caps, cap_len, key, cls_id 
+
+        if self.using_BERT == True: 
+            caps, mask = self.captions[sent_ix], self.att_masks[sent_ix]
+            return imgs, caps, mask, key, cls_id 
+
+        elif self.using_BERT == False: 
+            caps, cap_len = self.get_caption(new_sent_ix)
+            return imgs, caps, cap_len, key, cls_id 
 
 
     def __len__(self):

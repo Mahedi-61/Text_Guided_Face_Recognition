@@ -156,6 +156,7 @@ class ResNetFace(nn.Module):
         self.inplanes = 64
         self.use_se = use_se
         super(ResNetFace, self).__init__()
+        
         self.conv1 = nn.Conv2d(1, 64, kernel_size=3, padding=1, bias=False)
         self.bn1 = nn.BatchNorm2d(64)
         self.prelu = nn.PReLU()

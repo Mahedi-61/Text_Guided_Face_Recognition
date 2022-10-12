@@ -11,7 +11,7 @@ ROOT_PATH = osp.abspath(osp.join(osp.dirname(osp.abspath(__file__)),  ".."))
 sys.path.insert(0, ROOT_PATH)
 from utils.utils import merge_args_yaml
 from utils.utils import load_model
-from utils.prepare import get_test_dataloader, prepare_models, prepare_text_encoder
+from utils.prepare import prepare_dataloader, prepare_models, prepare_text_encoder
 from utils.modules import test 
 
 
@@ -26,7 +26,7 @@ def parse_args():
 
 
 def main(args):
-    test_dl, test_ds = get_test_dataloader(args)
+    test_dl, test_ds = prepare_dataloader(args, split="test", transform=None)
 
     args.vocab_size = test_ds.n_words
     text_encoder = prepare_text_encoder(args)
@@ -39,7 +39,7 @@ def main(args):
 
     #pprint.pprint(args)
     print("Start Testing")
-    test(test_dl, model, netG.module.fc1, text_encoder, args)
+    test(test_dl, model, netG, text_encoder, args)
 
 
 if __name__ == "__main__":

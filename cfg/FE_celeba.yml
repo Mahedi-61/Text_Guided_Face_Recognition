@@ -4,8 +4,7 @@ data_dir: ./data/celeba
 
 num_workers: 2 
 gpu_id: [0, 1]
-imsize: 128
-cond_dim: 256
+img_size: 128
 manual_seed: 100
 cuda: True
 
@@ -20,11 +19,9 @@ use_se: False
 
 
 lr_image_train: 0.1  
-lr_step: 10
-lr_decay: 0.95  
-
+lr_step: 5  
 weight_decay: 0.0005
-max_epoch: 150 
+max_epoch: 100 
 test_batch_size: 112
 train_batch_size: 480
 nf: 32
@@ -32,20 +29,20 @@ nf: 32
 ch_size: 1
 input_shape: (1, 128, 128)
 display: False
-finetune: False
 
-test_interval: 5
-save_interval: 5
+test_interval: 2
+save_interval: 2
 
 test_pair_list: ./data/celeba/celeba/celeba_test_10_pair.txt  
 checkpoints_path: ./checkpoints
-load_model_path: ./weights/celeba/FE/resnet18_celeba_5.pth
-resume_model_path: ./checkpoints/celeba/FE/resnet18_celeba_5.pth 
+load_model_path: ./weights/celeba/FE/resnet18_celeba_110.pth
+resume_model_path: ./checkpoints/celeba/FE/resnet18_celeba_110.pth 
 resume_epoch: 1
 
-prev_weight: False
-do_test: True
+prev_weight: True  
+do_test: True 
 rnn_type: LSTM #GRU 
+using_BERT: False  
 
 TEXT:
     WORDS_NUM: 18
