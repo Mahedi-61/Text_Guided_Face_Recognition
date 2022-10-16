@@ -9,8 +9,8 @@ import pandas as pd
 from PIL import Image
 import _pickle as pickle
 import gc
-from transformers import BertTokenizerFast as BertTokenizer
-#from transformers import AutoTokenizer
+#from transformers import BertTokenizerFast as BertTokenizer
+from transformers import AutoTokenizer
 
 
 def sort_sents(captions, caption_lens):
@@ -112,7 +112,7 @@ def load_bbox(data_dir, split):
 def load_captions_Bert(data_dir, filenames, args):
     # convert the raw text into a list of tokens.
     # attention_mask (which tokens should be used by the model 1 - use or 0 - don’t use).
-    tokenizer = BertTokenizer.from_pretrained(args.bert_config)
+    tokenizer = AutoTokenizer.from_pretrained(args.bert_config)
     all_captions = []
     all_attention_mask = []
 
@@ -142,10 +142,10 @@ def load_captions_Bert(data_dir, filenames, args):
                 all_attention_mask.append(attention_mask)
 
                 cnt += 1
-                if cnt == args.TEXT.CAPTIONS_PER_IMAGE:
+                if cnt == args.captions_per_image:
                     break
 
-            if cnt < args.TEXT.CAPTIONS_PER_IMAGE:
+            if cnt < args.captions_per_image:
                 print('ERROR: the captions for %s less than %d' % (filenames[i], cnt))
     return all_captions, all_attention_mask
 
@@ -242,7 +242,6 @@ def load_text_data(data_dir, embeddings_num):
             ixtoword, wordtoix = x[2], x[3]
             del x
             n_words = len(ixtoword)
-
 
     train_names = load_filenames(data_dir, 'train')
     test_names = load_filenames(data_dir, 'test')

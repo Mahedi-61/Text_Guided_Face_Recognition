@@ -5,7 +5,13 @@ import torch.nn.functional as F
 from torch import Tensor
 import numpy as np
 from typing import Optional, Tuple
+from torchsummary import summary
 
+
+def conv1x1(in_planes, out_planes):
+    "1x1 convolution with padding"
+    return nn.Conv2d(in_planes, out_planes, kernel_size=1, stride=1,
+                     padding=0, bias=False)
 
 class ScaledDotProductAttention(nn.Module):
     """
@@ -33,13 +39,13 @@ class ScaledDotProductAttention(nn.Module):
 
     def forward(self, query: Tensor, key: Tensor, value: Tensor, mask: Optional[Tensor] = None) -> Tuple[Tensor, Tensor]:
         score = torch.bmm(query, key.transpose(1, 2)) / self.sqrt_dim
-
         if mask is not None:
             score.masked_fill_(mask.view(score.size()), -float('Inf'))
 
         attn = F.softmax(score, -1)
         context = torch.bmm(attn, value)
         return context, attn
+
 
 
 class DotProductAttention(nn.Module):
@@ -455,3 +461,81 @@ class CustomizingAttention(nn.Module):
         loc_energy = loc_energy.permute(0, 2, 1, 3).reshape(batch_size, v_len, self.num_heads * self.dim)
 
         return loc_energy
+
+
+
+############### Fusion ###################
+class LinearFusion(nn.Module):
+    def __init__(self):
+        super(LinearFusion, self).__init__()
+        self.fc1 = nn.Linear(768, 768)
+
+    def forward(self, img_features, cond):
+        concat_features = torch.cat((img_features, cond), dim=1)
+        out = self.fc1(concat_features)
+        return out 
+
+
+class SelfAttention(nn.Module):
+    def __init__(self, channel_dim, scale=2):
+        super(SelfAttention, self).__init__()
+        self.inplanes = channel_dim
+        self.query_proj = nn.Conv2d(self.inplanes, self.inplanes // scale, 1)
+        self.key_proj = nn.Conv2d(self.inplanes,  self.inplanes // scale, 1)
+        self.value_proj = nn.Conv2d(self.inplanes, self.inplanes, 1)
+
+        self.sqrt_dim = np.sqrt(channel_dim / scale)
+
+
+    def forward(self, x: Tensor, y: Tensor) -> Tensor:
+        query = self.query_proj(y) # y--> text
+        N,C,W,H = query.size()
+        query = query.view(N, C, H*W).transpose(2,1)
+
+        key = self.key_proj(x) # x-->image
+        key = key.view(N, C, -1)
+
+        # compute attention
+        attention = torch.bmm(query, key) / self.sqrt_dim 
+
+        assert attention.size() == (N,H*W,H*W)
+        attention = F.softmax(attention, dim=-1)
+
+        # g transform
+        value = self.value_proj(x) #x --> image
+        N, C, W, H = y.size()
+        value = value.view(N, C, -1)
+        
+        # final response
+        response = torch.bmm(value, attention.transpose(2,1))
+        response = response.view(N, C, W, H)
+        return response
+        
+
+class CrossAttention(nn.Module):
+    def __init__(self, channel_dim = 256, scale=4):
+        super(CrossAttention,self).__init__()
+        self.channel_dim = channel_dim
+        self.conv_1 = conv1x1(512, 256)
+        self.sa = SelfAttention(channel_dim, scale)
+        self.avg_pool = nn.AvgPool2d(kernel_size = 4)
+        self.linear = nn.Linear(256, 64)
+
+    def forward(self, img: Tensor, word: Tensor) -> Tensor:
+        img = self.conv_1(img)
+        word = torch.bmm(word, word.transpose(1, 2)) / np.sqrt(self.channel_dim) #batch x 256 x 256
+        word = self.linear(word) #batch x 256 x 64
+        word = word.unsqueeze(-1).view(word.size(0), word.size(1), 8, 8)
+
+        iw = self.sa(img, word)
+        iw = self.avg_pool(iw)
+        iw = iw.view(iw.size(0), -1) #batch_size x 1024
+        #iw = self.linear(iw)
+        return iw 
+        
+
+if __name__ == "__main__":
+    x = torch.rand((16, 256, 16, 16))
+    y = torch.rand((16, 256, 23))
+    ca = CrossAttention()
+    summary(ca, [(256, 16, 16), (256, 23)], device="cpu")

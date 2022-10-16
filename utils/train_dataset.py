@@ -1,54 +1,13 @@
-import torch
 import torch.utils.data as data
-from torch.autograd import Variable
-from utils.dataset_utils import *
-
 import os
 import numpy as np
 import numpy.random as random
 
+from utils.dataset_utils import *
 
-
-def get_one_batch_data(dataloader, text_encoder, args):
-    data = next(iter(dataloader))
-    imgs, sent_emb, words_embs, keys, label = prepare_train_data(data, text_encoder)
-    return imgs, words_embs, sent_emb
-
-
-def prepare_train_data(data, text_encoder):
-    imgs, captions, caption_lens, keys, label = data
-    captions, sorted_cap_lens, sorted_cap_idxs = sort_sents(captions, caption_lens)
-    sent_emb, words_embs = encode_tokens(text_encoder, captions, sorted_cap_lens)
-    sent_emb = rm_sort(sent_emb, sorted_cap_idxs)
-    words_embs = rm_sort(words_embs, sorted_cap_idxs)
-    imgs = Variable(imgs).cuda()
-    return imgs, sent_emb, words_embs, keys, label 
-
-
-def prepare_train_data_for_DAMSM(data, text_encoder):
-    imgs, captions, caption_lens, keys, cls_ids = data
-    captions, sorted_cap_lens, sorted_cap_idxs = sort_sents(captions, caption_lens)
-    sent_emb, words_embs = encode_tokens(text_encoder, captions, sorted_cap_lens)
-    sent_emb = rm_sort(sent_emb, sorted_cap_idxs)
-    words_embs = rm_sort(words_embs, sorted_cap_idxs)
-    imgs = Variable(imgs).cuda()
-    return imgs, sent_emb, words_embs, keys, cls_ids, caption_lens
-
-
-
-####################### for BERT ################################
-def prepare_train_data_for_Bert(data, text_encoder):
-    imgs, caps, masks, keys, cls_ids = data
-    sent_emb, words_embs = encode_Bert_tokens(text_encoder, caps, masks)
-    imgs = Variable(imgs).cuda()
-    return imgs, sent_emb, words_embs, keys, cls_ids
-
-
-def get_one_batch_data_Bert(dataloader):
-    data = next(iter(dataloader))
-    imgs, sent_emb, words_emb, keys, cls_ids = prepare_train_data_for_Bert(data)
-    return imgs, words_emb, sent_emb
-
+################################################################
+#                    Train Dataset
+################################################################
 
 class TextImgTrainDataset(data.Dataset):
     def __init__(self, filenames, captions, att_masks, ixtoword=None, wordtoix=None, 
@@ -56,8 +15,7 @@ class TextImgTrainDataset(data.Dataset):
 
         print("############## Loading %s dataset ################" % split)
         self.transform = transform
-        self.word_num = args.TEXT.WORDS_NUM
-        self.embeddings_num = args.TEXT.CAPTIONS_PER_IMAGE
+        self.embeddings_num = args.captions_per_image
         self.data_dir = args.data_dir
         self.dataset_name = args.dataset_name
         self.using_BERT = args.using_BERT
@@ -77,6 +35,7 @@ class TextImgTrainDataset(data.Dataset):
             self.filenames = filenames
             self.captions = captions 
             self.att_masks = att_masks
+            self.word_num = args.bert_words_num 
 
         elif args.using_BERT == False:
             self.filenames = filenames
@@ -84,6 +43,7 @@ class TextImgTrainDataset(data.Dataset):
             self.ixtoword = ixtoword
             self.wordtoix = wordtoix
             self.n_words = n_words
+            self.word_num = args.lstm_words_num 
 
         split_dir = os.path.join(self.data_dir, self.split)
         self.class_id = load_class_id(split_dir)

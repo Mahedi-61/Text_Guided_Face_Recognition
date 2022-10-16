@@ -1,15 +1,10 @@
-import os
 import os.path as osp
 from scipy import linalg
 from sklearn import metrics
 import numpy as np
-from PIL import Image
-
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
-from utils.utils import mkdir_p
-from utils.test_dataset import prepare_test_data
+from utils.prepare import prepare_test_data, prepare_test_data_Bert
 from tqdm import tqdm 
 
 
@@ -32,7 +27,7 @@ def cal_accuracy(y_score, y_true):
 
 
 def get_features(model, imgs):
-    img_features = model(imgs)
+    img_features, word_features = model(imgs)
     """
     flip_imgs = torch.squeeze(imgs, 1)
     a = torch.stack([torch.fliplr(flip_imgs[i]) for i in range(0, flip_imgs.size(0))])
@@ -40,7 +35,7 @@ def get_features(model, imgs):
     img_features = torch.cat((img_features, flip_img_features), dim=1)
     del flip_img_features
     """ 
-    return img_features
+    return img_features, word_features
 
 
 def calculate_scores(y_score, y_true):
@@ -48,34 +43,49 @@ def calculate_scores(y_score, y_true):
     fprs, tprs, threshold = metrics.roc_curve(y_true, y_score)
     eer = fprs[np.nanargmin(np.absolute((1 - tprs) - fprs))]
     auc = metrics.auc(fprs, tprs)
+    str_scores = "\nAUC {:.4f} | EER {:.4f}".format(auc, eer)
+    print(str_scores)
+    return str_scores 
 
-    print("\nAUC {:.4f} | EER {:.4f}".format(auc, eer))
-    return auc, eer 
 
-
-def test(test_dl, model, netG, text_encoder, args):
+def test(test_dl, model, net, text_encoder, args):
     device = args.device
-    netG = netG.eval()
+    net = net.eval()
     preds = []
     labels = []
 
     loop = tqdm(total=len(test_dl))
     for step, data in enumerate(test_dl, 0):
-        img1, img2, sent_emb1, sent_emb2, pair_label  = prepare_test_data(data, text_encoder)
+        if args.using_BERT == True: 
+            img1, img2, sent_emb1, sent_emb2, words_emb1, words_emb2, pair_label = prepare_test_data_Bert(data, text_encoder)
+
+        elif args.using_BERT == False:
+            img1, img2, sent_emb1, sent_emb2, words_emb1, words_emb2, pair_label = prepare_test_data(data, text_encoder)
+        
+        # upload to cuda
         img1 = img1.to(device).requires_grad_()
         img2 = img2.to(device).requires_grad_()
-
-        sent_emb1 = sent_emb1.to(device).requires_grad_()
-        sent_emb2 = sent_emb2.to(device).requires_grad_()
         pair_label = pair_label.to(device)
 
-        img_features = get_features(model, img1)
-        out1 = netG(img_features, sent_emb1)
+        # get global and local image features from arc face model
+        img_features,  word_features = get_features(model, img1)
+        img_features, word_features = get_features(model, img2)
 
-        img_features = get_features(model, img2)
-        out2 = netG(img_features, sent_emb2)
+        if args.fusion_type == "linear":
+            sent_emb1 = sent_emb1.to(device).requires_grad_()
+            sent_emb2 = sent_emb2.to(device).requires_grad_()
 
-        del img_features
+            out1 = net(img_features, sent_emb1)
+            out2 = net(img_features, sent_emb2)
+
+        elif args.fusion_type == "cross_attention":
+            words_emb1 = words_emb1.to(device).requires_grad_()
+            words_emb2 = words_emb2.to(device).requires_grad_()
+
+            out1 = net(word_features, words_emb1)
+            out2 = net(word_features, words_emb2)
+
+        del img_features, word_features
         cosine_sim = nn.CosineSimilarity(dim=1, eps=1e-6)
         pred = cosine_sim(out1, out2)
         preds += pred.data.cpu().tolist()
@@ -87,9 +97,9 @@ def test(test_dl, model, netG, text_encoder, args):
 
     loop.close()
     best_acc, best_th = cal_accuracy(preds, labels)
-    calculate_scores(preds, labels)
+    str_socres = calculate_scores(preds, labels)
     print("accuracy: %0.4f; threshold %0.4f" %(best_acc, best_th))
-
+    return str_socres
 
 
 def predict_loss(predictor, img_feature, text_feature, negtive):

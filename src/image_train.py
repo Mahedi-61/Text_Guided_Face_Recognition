@@ -13,8 +13,9 @@ ROOT_PATH = osp.abspath(osp.join(osp.dirname(osp.abspath(__file__)),  ".."))
 sys.path.insert(0, ROOT_PATH)
 from utils.utils import merge_args_yaml, mkdir_p, load_full_model_for_image_rec
 from utils.prepare import get_train_dataloader, get_test_dataloader
-from models import resnet, metrics, focal_loss
+from models import models, metrics, focal_loss
 from image_test import test 
+
 
 def parse_args():
     # Training settings
@@ -30,16 +31,15 @@ def parse_args():
 def get_model(args):
     if args.backbone == 'resnet18':
         if args.dataset_name == "celeba":
-            model = resnet.resnet_face18(use_se=args.use_se)
+            model = models.resnet_face18(use_se=args.use_se)
 
         elif args.dataset_name == "birds":
-            model = resnet.resnet_face18(use_se=args.use_se)
+            model = models.resnet_face18(use_se=args.use_se)
 
     elif args.backbone == 'resnet34':
-        model = resnet.resnet34()
-    elif args.backbone == 'resnet50':
-        model = resnet.resnet50()
-
+        #model = resnet.resnet34()
+        pass 
+    
     model.to(args.device)
     model = torch.nn.DataParallel(model, device_ids=args.gpu_id)
     return model 
@@ -144,7 +144,7 @@ def main(args):
     optimizer = get_optimizer(args, model, metric_fc)
     scheduler = torch.optim.lr_scheduler.StepLR(optimizer, 
                                     step_size=args.lr_step, 
-                                    gamma=0.5)
+                                    gamma=args.gamma)
 
     criterion = get_loss(args)
 

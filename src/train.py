@@ -1,4 +1,4 @@
-from os import pread
+import os 
 import sys
 import os.path as osp
 import random
@@ -11,11 +11,10 @@ from tqdm import tqdm
 
 ROOT_PATH = osp.abspath(osp.join(osp.dirname(osp.abspath(__file__)),  ".."))
 sys.path.insert(0, ROOT_PATH)
-from utils.utils import mkdir_p, merge_args_yaml
-from utils.utils import save_models, load_model_opt 
-from utils.prepare import prepare_dataloader, prepare_text_encoder, prepare_models
+from utils.utils import mkdir_p, merge_args_yaml, save_models, load_model_opt 
+from utils.prepare import prepare_dataloader, prepare_text_encoder 
+from utils.prepare import prepare_models, prepare_train_data_for_Bert, prepare_train_data
 from utils.modules import test, get_features  
-from utils.train_dataset import get_one_batch_data, prepare_train_data, get_one_batch_data_Bert
 from models import metrics, focal_loss
 
 def parse_args():
@@ -41,31 +40,29 @@ def get_loss(args):
 
 def get_margin(args):
     if args.metric == "add_margin":
-        metric_fc = metrics.AddMarginProduct(1024, 
+        metric_fc = metrics.AddMarginProduct(args.fusion_final_dim, 
                                             args.num_classes, 
                                             s=30, m=0.35)
     elif args.metric == "arc_margin":
-        metric_fc = metrics.ArcMarginProduct(1024, 
+        metric_fc = metrics.ArcMarginProduct(args.fusion_final_dim, 
                                             args.num_classes, 
                                             s=30, m=0.5, 
                                             easy_margin=args.easy_margin)
 
-    elif args.metric == "linear":
-        metric_fc = metrics.MyLinear(1024, args.num_classes)
     
     metric_fc.to(args.device)
     metric_fc = torch.nn.DataParallel(metric_fc, device_ids=args.gpu_id)
     return metric_fc
 
 
-def get_optimizer(args, netG, metric_fc):
+def get_optimizer(args, net, metric_fc):
     if args.optimizer == 'sgd':
-        optimizer = torch.optim.SGD([{'params': netG.parameters()}, 
+        optimizer = torch.optim.SGD([{'params': net.parameters()}, 
                                      {'params': metric_fc.parameters()}],
                                      lr=args.lr_image_train, 
                                      weight_decay=args.weight_decay)
     elif args.optimizer == 'adam':
-        optimizer = torch.optim.Adam([{'params': netG.parameters()}, 
+        optimizer = torch.optim.Adam([{'params': net.parameters()}, 
                                       {'params': metric_fc.parameters()}],
                                       lr=args.lr_image_train, 
                                       weight_decay=args.weight_decay)
@@ -73,24 +70,35 @@ def get_optimizer(args, netG, metric_fc):
 
     
 
-def train(train_dl, model, netG, metric_fc, text_encoder, criterion, optimizer, args):
+def train(train_dl, model, net, metric_fc, text_encoder, criterion, optimizer, scheduler, args):
     device = args.device
-    epoch = args.current_epoch
-    max_epoch = args.max_epoch
-    netG = netG.train()
+    net = net.train()
     metric_fc = metric_fc.train()
 
     loop = tqdm(total=len(train_dl))
     for step, data in enumerate(train_dl, 0):
-        imgs, sent_emb, words_embs, keys, label = prepare_train_data(data, text_encoder)
+        if args.using_BERT == True:
+            imgs, sent_emb, words_emb, keys, label = \
+                    prepare_train_data_for_Bert(data, text_encoder)
+            cap_lens = None 
+
+        if args.using_BERT == False:
+            imgs, sent_emb, words_emb, keys, label, cap_lens = \
+                    prepare_train_data(data, text_encoder)
+        
+
         imgs = imgs.to(device).requires_grad_()
         sent_emb = sent_emb.to(device).requires_grad_()
-        #words_embs = words_embs.to(device).requires_grad_()
         label = label.to(device)
         
-        img_features = get_features(model, imgs)
-        output = netG(img_features, sent_emb)
-        
+        img_features, word_features = get_features(model, imgs)
+
+        if args.fusion_type == "linear":
+            output = net(img_features, sent_emb)
+
+        elif args.fusion_type == "cross_attention":
+            output = net(word_features, words_emb)
+
         output = metric_fc(output, label)
         loss = criterion(output, label)
         optimizer.zero_grad()
@@ -99,34 +107,38 @@ def train(train_dl, model, netG, metric_fc, text_encoder, criterion, optimizer, 
 
         # update loop information
         loop.update(1)
-        loop.set_description(f'Training Epoch [{epoch}/{max_epoch}]')
+        loop.set_description(f'Training Epoch [{args.current_epoch}/{args.max_epoch}]')
         loop.set_postfix()
 
     loop.close()
-    del img_features
+    scheduler.step()
+    print("learning rate: ", scheduler.get_last_lr())
+    str_loss = " | loss {:0.4f}".format(loss.item())
+    print(str_loss)
+    del img_features, output
+    return str_loss + "\n"  
+    
 
 
 def main(args):
     # prepare dataloader, models, data
     args.model_save_file = osp.join(args.checkpoints_path, str(args.dataset_name))
     mkdir_p(args.model_save_file)
+    p_loss = ""
 
     train_dl, train_ds, valid_dl, valid_ds = prepare_dataloader(args, split="train", transform=None)
-    #test_dl, test_ds = get_test_dataloader(args)
+    test_dl, test_ds = prepare_dataloader(args, split="test", transform=None)
+    #args.vocab_size = train_ds.n_words
 
-    get_one_batch_data_Bert(train_dl)
-
-    """
-    args.vocab_size = train_ds.n_words
     text_encoder = prepare_text_encoder(args)
     
-    model, netG = prepare_models(args)
+    model, net = prepare_models(args)
     metric_fc = get_margin(args)
 
-    optimizer = get_optimizer(args, netG, metric_fc)
+    optimizer = get_optimizer(args, net, metric_fc)
     scheduler = torch.optim.lr_scheduler.StepLR(optimizer, 
                                     step_size=args.lr_step, 
-                                    gamma=0.1)
+                                    gamma=args.gamma)
 
     criterion = get_loss(args)
     
@@ -135,7 +147,7 @@ def main(args):
     if args.resume_epoch!=1:
         print("loading checkpoint; epoch: ", args.resume_epoch)
         strat_epoch = args.resume_epoch+1
-        netG, metric_fc, optimizer = load_model_opt(netG, metric_fc, optimizer, args.resume_model_path)
+        net, metric_fc, optimizer = load_model_opt(net, metric_fc, optimizer, args.resume_model_path)
     
 
     #pprint.pprint(args)
@@ -143,18 +155,20 @@ def main(args):
     for epoch in range(strat_epoch, args.max_epoch + 1):
         torch.cuda.empty_cache()
         args.current_epoch = epoch 
-        train(train_dl, model, netG, metric_fc, text_encoder, criterion, optimizer, args)
-        
+        p_loss += train(train_dl, model, net, metric_fc, text_encoder, criterion, optimizer, scheduler, args)
+    
         # save
         if epoch % args.save_interval==0:
-            save_models(netG, metric_fc, optimizer, epoch, args)
-            scheduler.step()
-            print("learning rate: ", optimizer.param_groups[0]['lr'])
+            save_models(net, metric_fc, optimizer, epoch, args)
         
         if ((args.do_test == True) and (epoch % args.test_interval == 0)):
-            print("Let's test the model")
-            test(test_dl, model, netG, text_encoder, args)
-    """
+            print("\nLet's test the model")
+            p_loss += test(test_dl, model, net, text_encoder, args)
+
+            #write the loss in a text file
+            with open(os.path.join(ROOT_PATH, "output.txt"), "w") as f:
+                f.write(p_loss)
+        
 
 if __name__ == "__main__":
     args = merge_args_yaml(parse_args())

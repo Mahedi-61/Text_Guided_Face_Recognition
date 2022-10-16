@@ -1,39 +1,40 @@
+#### configuration and directory
 CONFIG_NAME: DAMSM
 dataset_name: celeba
 data_dir: ./data/celeba
+checkpoints_path: ./checkpoints
+test_pair_list: ./data/celeba/celeba/celeba_test_10_pair.txt  
+resume_model_path: ./checkpoints/celeba/DAMSM/Bert/arc_text_encoder2.pth
+resume_epoch: 1
 
+# machine setup
 num_workers: 2 
 gpu_id: [0, 1]
 manual_seed: 100
 CUDA: True
 
+# model arch 
 img_size: 128  #299 for Inception
-test_batch_size: 64
-train_batch_size: 516 
-max_epoch: 2
-test_interval: 2
-save_interval: 2
-do_test: True   
-using_BERT: True      
-rnn_type: LSTM #GRU  
-
-checkpoints_path: ./checkpoints
-test_pair_list: ./data/celeba/celeba/celeba_test_10_pair.txt  
-resume_model_path: ./checkpoints/celeba/DAMSM/Bert/arc_text_encoder58.pth
-resume_epoch: 1
-prev_weight: False
-
-
-lr_text_bert:  0.0001  #5e-4 good but slow convergence; 1e-3 too fast
+lr_text_bert:  0.00005  #5e-4 good but slow convergence; 1e-3 too fast
 lr_text: 0.0001
 lr_image : 0.0009
 lr_drop: 200
 lr_gamma: 0.1
 weight_decay: 0.0001
-clip_max_norm: 1.5
-hidden_dropout_prob: 0.1
-num_bert_layer: 3
+clip_max_norm: 1.0
 
+#trainng settings
+test_batch_size: 32
+train_batch_size: 32 
+max_epoch: 5
+test_interval: 1
+save_interval: 1
+
+# flags
+do_test: True  
+prev_weight: False
+
+# encoder
 TRAIN:
     FLAG: True
     SMOOTH:
@@ -41,13 +42,13 @@ TRAIN:
         GAMMA2: 5.0
         GAMMA3: 10.0
 
-TEXT:
-    EMBEDDING_DIM: 256
-    CAPTIONS_PER_IMAGE: 10
-    WORDS_NUM: 18
-
+using_BERT: True      
+rnn_type: LSTM #GRU  
 bert_words_num: 24
-bert_config: bert-base-uncased #distilbert-base-uncased 
+lstm_words_num: 18 
+embedding_dim: 256
+captions_per_image: 10
+bert_config: distilbert-base-uncased #bert-base-uncased 
 
 #for inception image encodeer
 #1. chnage img_size = 299

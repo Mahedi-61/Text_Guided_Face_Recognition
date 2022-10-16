@@ -22,9 +22,10 @@ from utils.utils import mkdir_p, merge_args_yaml
 from models.losses import sent_loss, words_loss
 
 from utils.prepare import prepare_dataloader
-from utils.train_dataset import prepare_train_data_for_Bert, prepare_train_data_for_DAMSM
+from utils.train_dataset import prepare_train_data_for_Bert, prepare_train_data
 
-from models.DAMSM import BERT_ENCODER, RNN_ENCODER, CNN_ENCODER, ResNetFace_ENCODER
+from models.models import BERT_ENCODER, RNN_ENCODER, CNN_ENCODER, ResNetFace_ENCODER
+from transformers import get_linear_schedule_with_warmup 
 
 
 def parse_args():
@@ -94,7 +95,7 @@ def train(dataloader, rnn_model, cnn_model, optimizerT, optimizerI, args):
 
         if args.using_BERT == False:
             imgs, sent_emb, words_emb, keys, class_ids, cap_lens = \
-                    prepare_train_data_for_DAMSM(data, rnn_model)
+                    prepare_train_data(data, rnn_model)
         
 
         # words_features: batch_size x nef x 17 x 17
@@ -105,11 +106,12 @@ def train(dataloader, rnn_model, cnn_model, optimizerT, optimizerI, args):
         nef, att_sze = words_features.size(1), words_features.size(2)
         # words_features = words_features.view(batch_size, nef, -1)
  
+        
         w_loss0, w_loss1, attn_maps = words_loss(words_features, words_emb, labels,
                                             cap_lens, class_ids.numpy(), batch_size, args)
         w_total_loss0 += w_loss0.data
         w_total_loss1 += w_loss1.data
-        damsm_loss = w_loss0 + w_loss1
+        damsm_loss = w_loss0 + w_loss1 
 
         s_loss0, s_loss1 = sent_loss(sent_code, sent_emb, labels, class_ids.numpy(), batch_size, args)
         damsm_loss += s_loss0 + s_loss1 
@@ -119,7 +121,7 @@ def train(dataloader, rnn_model, cnn_model, optimizerT, optimizerI, args):
 
         #`clip_grad_norm` helps prevent the exploding gradient problem in RNNs / LSTMs.        
         torch.nn.utils.clip_grad_norm_(rnn_model.parameters(), args.clip_max_norm)
-        torch.nn.utils.clip_grad_norm_(cnn_model.parameters(), args.clip_max_norm)
+        #torch.nn.utils.clip_grad_norm_(cnn_model.parameters(), args.clip_max_norm)
 
         optimizerT.step()
         optimizerI.step()
@@ -153,8 +155,8 @@ def evaluate(dataloader, rnn_model, cnn_model, args):
     loop = tqdm(total = total_length)
 
     for step, data in enumerate(dataloader, 0):
-        rnn_model.zero_grad()
-        cnn_model.zero_grad()
+        #rnn_model.zero_grad()
+        #cnn_model.zero_grad()
         
         if args.using_BERT == True:
             imgs, sent_emb, words_emb, keys, class_ids = \
@@ -163,7 +165,7 @@ def evaluate(dataloader, rnn_model, cnn_model, args):
 
         if args.using_BERT == False:
             imgs, sent_emb, words_emb, keys, class_ids, cap_lens = \
-                    prepare_train_data_for_DAMSM(data, rnn_model)
+                    prepare_train_data(data, rnn_model)
 
         # words_features: batch_size x nef x 17 x 17
         # sent_code: batch_size x nef
@@ -186,7 +188,7 @@ def evaluate(dataloader, rnn_model, cnn_model, args):
 
 def build_models_with_prev_weight(args):
     # building text encoder
-    text_encoder = RNN_ENCODER(args, nhidden=args.TEXT.EMBEDDING_DIM)
+    text_encoder = RNN_ENCODER(args, nhidden=args.embedding_dim)
     optimizerT = torch.optim.AdamW(text_encoder.parameters(), 
                                 lr = args.lr_lstm, 
                                 weight_decay = args.weight_decay)
@@ -232,19 +234,20 @@ def build_models(args):
         text_encoder = BERT_ENCODER(args)
         text_encoder = nn.DataParallel(text_encoder, device_ids=args.gpu_id).cuda()
         optimizerT = torch.optim.AdamW(text_encoder.parameters(), 
-                                       lr = args.lr_text_bert, 
-                                       weight_decay = args.weight_decay)
+                                       lr = args.lr_text_bert,
+                                       eps = 1e-8)
 
     elif args.using_BERT == False:
-        text_encoder = RNN_ENCODER(args, nhidden=args.TEXT.EMBEDDING_DIM)
+        text_encoder = RNN_ENCODER(args, nhidden=args.embedding_dim)
         text_encoder = text_encoder.cuda()
         optimizerT = torch.optim.AdamW(text_encoder.parameters(), 
-                                       lr = args.lr_text, 
-                                       weight_decay = args.weight_decay)
+                                       lr = args.lr_text)
 
-    lr_schedulerT = torch.optim.lr_scheduler.StepLR(optimizerT, 
-                                                    args.lr_drop, 
-                                                    gamma = args.lr_gamma)
+
+    total_steps = args.len_train_dl * args.max_epoch
+    lr_schedulerT = get_linear_schedule_with_warmup(optimizerT, 
+                                                num_warmup_steps = 0, 
+                                                num_training_steps = total_steps)
 
     # building image encoder
     image_encoder = ResNetFace_ENCODER(args)
@@ -255,7 +258,7 @@ def build_models(args):
         if v.requires_grad:
             para.append(v)
 
-    optimizerI = torch.optim.AdamW(para, 
+    optimizerI = torch.optim.Adam(para, 
                                     lr = args.lr_image) 
 
     lr_schedulerI = torch.optim.lr_scheduler.StepLR(optimizerI, 
@@ -304,6 +307,7 @@ def main(args):
     print("Loading training and valid data ...")
     train_dl, train_ds, valid_dl, valid_ds = prepare_dataloader(args, "train", image_transform)
 
+    args.len_train_dl = len(train_dl)
     if args.using_BERT == False:
         print("dataset words: %s, embeddings number: %s" % 
                             (train_ds.n_words, train_ds.embeddings_num))

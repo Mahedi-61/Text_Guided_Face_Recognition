@@ -4,7 +4,8 @@ import numpy as np
 import torch.nn.functional as F
 from models.attention import func_attention
 
-# ##################Loss for matching text-image###################
+
+# ################## Loss for matching text-image ###################
 def cosine_similarity(x1, x2, dim=1, eps=1e-8):
     #Returns cosine similarity between x1 and x2, computed along dim.
     w12 = torch.sum(x1 * x2, dim)
@@ -77,7 +78,7 @@ def words_loss(img_features, words_emb, labels, cap_lens, class_ids, batch_size,
 
         # Get the i-th text description
         if args.using_BERT == False: words_num = cap_lens[i]
-        elif args.using_BERT: words_num = args.bert_words_num 
+        elif args.using_BERT: words_num = args.bert_words_num - 1 #removing [cls] token 
 
         word = words_emb[i, :, :words_num].unsqueeze(0).contiguous()
 

@@ -1,13 +1,22 @@
 CONFIG_NAME: FE
 dataset_name: celeba
 data_dir: ./data/celeba
+test_pair_list: ./data/celeba/celeba/celeba_valid_pair.txt  
+checkpoints_path: ./checkpoints
+load_model_path: ./weights/celeba/FE/resnet18_celeba_110.pth
+resume_model_path: ./checkpoints/celeba/state_epoch_focal_loss_030.pth
+damsm_encoder_path: ./weights/celeba/DAMSMencoder/arc_text_encoder5.pth
+resume_epoch: 1
 
+# machine setup 
 num_workers: 2 
 gpu_id: [0, 1]
-imsize: 128
 manual_seed: 100
 cuda: True
 
+# model arch
+img_size: 128
+ch_size: 1
 backbone: resnet18
 classify: softmax
 num_classes: 24000 
@@ -17,37 +26,31 @@ loss: focal_loss
 optimizer: sgd 
 use_se: False
 
-#state_epoch: 0
-lr_image_train: 0.1  
-lr_step: 10
-lr_decay: 0.95  
-multi_lr_step: 0.96
-
+# training settings 
+lr_image_train: 0.01  #0.05 for linear fusion 
+lr_step: 5
+gamma: 0.5  
 weight_decay: 0.0005
-max_epoch: 30 #1301
-test_batch_size: 80
-train_batch_size: 384
-nf: 32
+max_epoch: 50
+test_batch_size: 32 
+train_batch_size: 32
+test_interval: 1
+save_interval: 1
 
-ch_size: 1
-input_shape: (1, 128, 128)
-display: False
-test_interval: 3
-save_interval: 3
 
-test_pair_list: ./data/celeba/celeba/celeba_valid_pair.txt  
-checkpoints_path: ./checkpoints
-load_model_path: ./weights/celeba/FE/resnet18_celeba_5.pth
-resume_model_path: ./checkpoints/celeba/state_epoch_focal_loss_015.pth
-resume_epoch: 1
+# fusion arch
+fusion_type: cross_attention #linear
+fusion_final_dim: 1024
 
-prev_weight: False
+# flags
+prev_weight: True 
 do_test: True
-rnn_type: LSTM #GRU 
-using_BERT: True   
 
-TEXT:
-    WORDS_NUM: 18
-    EMBEDDING_DIM: 256
-    CAPTIONS_PER_IMAGE: 10
-    DAMSM_NAME: ./data/celeba/DAMSMencoder/text_encoder550.pth
+# encoder settings
+rnn_type: LSTM #GRU 
+using_BERT: True    
+bert_words_num: 24
+lstm_words_num: 18 
+bert_config: distilbert-base-uncased #bert-base-uncased  
+embedding_dim: 256
+captions_per_image: 10

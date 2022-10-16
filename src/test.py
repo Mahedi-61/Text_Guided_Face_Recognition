@@ -30,16 +30,16 @@ def main(args):
 
     args.vocab_size = test_ds.n_words
     text_encoder = prepare_text_encoder(args)
-    model, netG = prepare_models(args)
+    model, net = prepare_models(args)
 
     
     # load from checkpoint
     print("loading checkpoint; epoch: ", args.resume_epoch)
-    netG = load_model(netG, args.resume_model_path)
+    net = load_model(net, args.resume_model_path)
 
     #pprint.pprint(args)
     print("Start Testing")
-    test(test_dl, model, netG, text_encoder, args)
+    test(test_dl, model, net, text_encoder, args)
 
 
 if __name__ == "__main__":

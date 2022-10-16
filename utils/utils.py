@@ -75,20 +75,20 @@ def load_only_model_for_image_rec(model, path, prev_weight):
     return model 
 
 
-def load_model_opt(netG, metric_fc, optim, path):
+def load_model_opt(net, metric_fc, optim, path):
     print("loading full tgfr model .....")
     checkpoint = torch.load(path, map_location=torch.device('cpu'))
-    netG = load_model_weights(netG, checkpoint['model']['netG'])
+    net = load_model_weights(net, checkpoint['model']['netG'])
     metric_fc = load_model_weights(metric_fc, checkpoint['model']['metric_fc'])
     optim = load_opt_weights(optim, checkpoint['optimizer']['optimizer'])
-    return netG, metric_fc, optim 
+    return net, metric_fc, optim 
 
 
-def load_model(netG, path):
+def load_model(net, path):
     print("loading full tgfr model .....")
     checkpoint = torch.load(path, map_location=torch.device('cpu'))
-    netG = load_model_weights(netG, checkpoint['model']['netG'])
-    return netG
+    net = load_model_weights(net, checkpoint['model']['net'])
+    return net
 
 
 
@@ -112,10 +112,10 @@ def load_model_weights(model, weights, train=True):
     return model
 
 
-def save_models(netG, metric_fc, optG, epoch, args):
-    state = {'model': {'netG': netG.state_dict(), 'metric_fc': metric_fc.state_dict()},
+def save_models(net, metric_fc, optG, epoch, args):
+    state = {'model': {'net': net.state_dict(), 'metric_fc': metric_fc.state_dict()},
             'optimizer': {'optimizer': optG.state_dict()}}
-    torch.save(state, '%s/state_epoch_%s_%03d.pth' % (args.model_save_file, args.loss, epoch))
+    torch.save(state, '%s/state_epoch_%s_%03d.pth' % (args.model_save_file, args.fusion_type, epoch))
 
 
 # data util
@@ -184,15 +184,6 @@ def sort_example_captions(captions, cap_lens, device):
     return captions, cap_lens, sorted_indices
 
 
-"""
-def prepare_sample_data(captions, caption_lens, text_encoder, device):
-    print('*'*40)
-    captions, sorted_cap_lens, sorted_cap_idxs = sort_example_captions(captions, caption_lens, device)
-    sent_emb, words_embs = encode_tokens(text_encoder, captions, sorted_cap_lens)
-    sent_emb = rm_sort(sent_emb, sorted_cap_idxs)
-    words_embs = rm_sort(words_embs, sorted_cap_idxs)
-    return sent_emb, words_embs
-"""
 
 def encode_tokens(text_encoder, caption, cap_lens):
     # encode text

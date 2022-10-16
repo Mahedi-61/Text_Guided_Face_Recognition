@@ -1,30 +1,9 @@
-import torch
 import torch.utils.data as data
-from torch.autograd import Variable
 import torchvision.transforms as transforms
 import numpy as np 
 import os
 import numpy.random as random
 from utils.dataset_utils import * 
-
-
-def prepare_test_data(data, text_encoder):
-    img1, img2, cap1, cap2, cap_len1, cap_len2, pair_label = data
-
-    cap1, sorted_cap_len1, sorted_cap_idxs = sort_sents(cap1, cap_len1)
-    sent_emb1, words_embs1 = encode_tokens(text_encoder, cap1, sorted_cap_len1)
-    sent_emb1 = rm_sort(sent_emb1, sorted_cap_idxs)
-    words_embs1 = rm_sort(words_embs1, sorted_cap_idxs)
-
-    cap2, sorted_cap_len2, sorted_cap_idxs = sort_sents(cap2, cap_len2)
-    sent_emb2, words_embs2 = encode_tokens(text_encoder, cap2, sorted_cap_len2)
-    sent_emb2 = rm_sort(sent_emb2, sorted_cap_idxs)
-    words_embs2 = rm_sort(words_embs2, sorted_cap_idxs)
-
-    img1 = Variable(img1).cuda()
-    img2 = Variable(img2).cuda()
-    return img1, img2, sent_emb1, sent_emb2, pair_label 
-
 
 ################################################################
 #                    Test Dataset
@@ -34,10 +13,11 @@ class TextImgTestDataset(data.Dataset):
                     n_words=None, transform=None, args=None):
         self.split= "test"
         self.transform = transform
-        self.word_num = args.TEXT.WORDS_NUM
-        self.embeddings_num = args.TEXT.CAPTIONS_PER_IMAGE
         self.data_dir = args.data_dir
         self.dataset_name = args.dataset_name
+        self.embeddings_num = args.captions_per_image
+        self.filenames = filenames
+        self.captions = captions 
         
         if self.data_dir.find('birds') != -1:
             self.bbox = load_bbox(self.data_dir, self.split)
@@ -46,13 +26,11 @@ class TextImgTestDataset(data.Dataset):
 
         self.using_BERT = args.using_BERT 
         if args.using_BERT == True: 
-            self.filenames = filenames
-            self.captions = captions 
+            self.word_num = args.bert_words_num
             self.att_masks = att_masks
 
         elif args.using_BERT == False:
-            self.filenames = filenames
-            self.captions = captions 
+            self.word_num = args.lstm_words_num
             self.ixtoword = ixtoword
             self.wordtoix = wordtoix
             self.n_words = n_words

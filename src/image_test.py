@@ -10,8 +10,8 @@ from tqdm import tqdm
 
 ROOT_PATH = osp.abspath(osp.join(osp.dirname(osp.abspath(__file__)),  ".."))
 sys.path.insert(0, ROOT_PATH)
-from utils.utils import mkdir_p, merge_args_yaml
-from utils.prepare import get_test_dataloader, prepare_models
+from utils.utils import merge_args_yaml
+from utils.prepare import prepare_dataloader, prepare_models
 from utils.modules import * 
 
 
@@ -62,10 +62,14 @@ def parse_args():
 
 
 def main(args):
-    test_dl, test_ds = get_test_dataloader(args)
-    args.vocab_size = test_ds.n_words
+    test_dl, test_ds = prepare_dataloader(args, "test", transform=None)
+    if args.using_BERT == False:
+        print("dataset words: %s, embeddings number: %s" % 
+                    (test_ds.n_words, test_ds.embeddings_num))
+        args.vocab_size = test_ds.n_words
+        
     print("loading models ...")
-    model, netG = prepare_models(args)
+    model, net = prepare_models(args)
   
     #pprint.pprint(args)
     print("start testing ...")
@@ -83,8 +87,7 @@ if __name__ == "__main__":
     random.seed(args.manual_seed)
     np.random.seed(args.manual_seed)
     torch.manual_seed(args.manual_seed)
-
     torch.cuda.manual_seed_all(args.manual_seed)
     args.device = torch.device("cuda")
-
+    
     main(args)
