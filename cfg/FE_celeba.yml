@@ -43,10 +43,11 @@ prev_weight: True
 do_test: True 
 
 # encoder settings
-rnn_type: LSTM #GRU 
-using_BERT: False   
-bert_words_num: 24
+rnn_type: LSTM #GRU
+en_type: "bert"  
+using_BERT: False     
+bert_words_num: 21
 lstm_words_num: 18 
-bert_config: distilbert-base-uncased #bert-base-uncased  
+bert_config: bert-base-uncased #distilbert-base-uncased   
 embedding_dim: 256
 captions_per_image: 10

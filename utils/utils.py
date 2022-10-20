@@ -54,44 +54,6 @@ def save_args(save_path, args):
 
 
 
-# save and load models
-def load_opt_weights(optimizer, weights):
-    optimizer.load_state_dict(weights)
-    return optimizer
-
-
-def load_full_model_for_image_rec(model, metric_fc, optim, path):
-    checkpoint = torch.load(path, map_location=torch.device('cpu'))
-    model = load_model_weights(model, checkpoint['full_model']['model'])
-    metric_fc = load_model_weights(metric_fc, checkpoint['full_model']['metric_fc'])
-    optim = load_opt_weights(optim, checkpoint['optimizer']['optimizer'])
-    return model, metric_fc, optim
-
-
-def load_only_model_for_image_rec(model, path, prev_weight):
-    checkpoint = torch.load(path) 
-    if prev_weight == True: model.load_state_dict(checkpoint)
-    else: model.load_state_dict(checkpoint["full_model"]["model"])
-    return model 
-
-
-def load_model_opt(net, metric_fc, optim, path):
-    print("loading full tgfr model .....")
-    checkpoint = torch.load(path, map_location=torch.device('cpu'))
-    net = load_model_weights(net, checkpoint['model']['netG'])
-    metric_fc = load_model_weights(metric_fc, checkpoint['model']['metric_fc'])
-    optim = load_opt_weights(optim, checkpoint['optimizer']['optimizer'])
-    return net, metric_fc, optim 
-
-
-def load_model(net, path):
-    print("loading full tgfr model .....")
-    checkpoint = torch.load(path, map_location=torch.device('cpu'))
-    net = load_model_weights(net, checkpoint['model']['net'])
-    return net
-
-
-
 def load_model_weights(model, weights, train=True):
     multi_gpus = True 
     if list(weights.keys())[0].find('module')==-1:
@@ -113,24 +75,42 @@ def load_model_weights(model, weights, train=True):
 
 
 def save_models(net, metric_fc, optG, epoch, args):
+    save_dir = os.path.join(args.checkpoints_path, 
+                            args.dataset_name, 
+                            args.CONFIG_NAME)
+    mkdir_p(save_dir)
+
+    name = '%s/state_epoch_%s_%s_%03d.pth' % (args.model_save_file, args.en_type, args.fusion_type, epoch)
+    state_path = os.path.join(save_dir, name)
     state = {'model': {'net': net.state_dict(), 'metric_fc': metric_fc.state_dict()},
             'optimizer': {'optimizer': optG.state_dict()}}
-    torch.save(state, '%s/state_epoch_%s_%03d.pth' % (args.model_save_file, args.fusion_type, epoch))
+    torch.save(state, state_path)
 
 
-# data util
-def write_to_txt(filename, contents): 
-    fh = open(filename, 'w') 
-    fh.write(contents) 
-    fh.close()
+def load_models(net, metric_fc, optim, path):
+    print("loading full tgfr model .....")
+    checkpoint = torch.load(path, map_location=torch.device('cpu'))
+    net = load_model_weights(net, checkpoint['model']['net'])
+    metric_fc = load_model_weights(metric_fc, checkpoint['model']['metric_fc'])
+    optim = optim.load_state_dict(checkpoint['optimizer']['optimizer'])
+    return net, metric_fc, optim 
 
 
-def load_pickle(file_path):
-    with open(file_path, 'rb') as f:
-        data = pickle.load(f)
-    return data
+def load_fusion_net(net, path):
+    print("loading full tgfr model .....")
+    checkpoint = torch.load(path, map_location=torch.device('cpu'))
+    net = load_model_weights(net, checkpoint['model']["net"])
+    return net
 
 
+def load_pretrained_arch_model(model, path):
+    checkpoint = torch.load(path)
+    model.load_state_dict(checkpoint) 
+    return model 
+
+
+
+"""
 ###########  GEN  #############
 def get_tokenizer():
     from nltk.tokenize import RegexpTokenizer
@@ -221,3 +201,4 @@ def save_img(img, path):
     im = np.transpose(im, (1, 2, 0))
     im = Image.fromarray(im)
     im.save(path)
+"""

@@ -1,12 +1,13 @@
-CONFIG_NAME: FE
+CONFIG_NAME: FUSION
 dataset_name: celeba
 data_dir: ./data/celeba
 test_pair_list: ./data/celeba/celeba/celeba_valid_pair.txt  
 checkpoints_path: ./checkpoints
 load_model_path: ./weights/celeba/FE/resnet18_celeba_110.pth
-resume_model_path: ./checkpoints/celeba/state_epoch_focal_loss_030.pth
-damsm_encoder_path: ./weights/celeba/DAMSMencoder/arc_text_encoder5.pth
+resume_model_path: ./weights/celeba/state_epoch_lstm_linear_009.pth
+damsm_encoder_path: ./weights/celeba/DAMSMencoder/arc_text_encoder_bert_4.pth
 resume_epoch: 1
+
 
 # machine setup 
 num_workers: 2 
@@ -27,20 +28,22 @@ optimizer: sgd
 use_se: False
 
 # training settings 
-lr_image_train: 0.01  #0.05 for linear fusion 
+lr_image_train: 0.1  #0.05 for linear fusion 
 lr_step: 5
 gamma: 0.5  
 weight_decay: 0.0005
-max_epoch: 50
+max_epoch: 30 
 test_batch_size: 32 
 train_batch_size: 32
 test_interval: 1
 save_interval: 1
-
+temperature: 1.0
+trainable: False
 
 # fusion arch
-fusion_type: cross_attention #linear
-fusion_final_dim: 1024
+fusion_type: linear #linear #sentence_attention #cross_attention 
+fusion_final_dim: 512 #1024
+clip_loss: True 
 
 # flags
 prev_weight: True 
@@ -48,9 +51,10 @@ do_test: True
 
 # encoder settings
 rnn_type: LSTM #GRU 
-using_BERT: True    
-bert_words_num: 24
+using_BERT: True
+en_type: "bert"     
+bert_words_num: 21
 lstm_words_num: 18 
-bert_config: distilbert-base-uncased #bert-base-uncased  
+bert_config:  bert-base-uncased #distilbert-base-uncased  
 embedding_dim: 256
 captions_per_image: 10

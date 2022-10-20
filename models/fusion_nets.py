@@ -221,84 +221,6 @@ class MultiHeadLocationAwareAttention(nn.Module):
         return context, attn
 
 
-class MultiHeadAttention(nn.Module):
-    """
-    Multi-Head Attention proposed in "Attention Is All You Need"
-    Instead of performing a single attention function with d_model-dimensional keys, values, and queries,
-    project the queries, keys and values h times with different, learned linear projections to d_head dimensions.
-    These are concatenated and once again projected, resulting in the final values.
-    Multi-head attention allows the model to jointly attend to information from different representation
-    subspaces at different positions.
-
-    MultiHead(Q, K, V) = Concat(head_1, ..., head_h) · W_o
-        where head_i = Attention(Q · W_q, K · W_k, V · W_v)
-
-    Args:
-        d_model (int): The dimension of keys / values / quries (default: 512)
-        num_heads (int): The number of attention heads. (default: 8)
-
-    Inputs: query, key, value, mask
-        - **query** (batch, q_len, d_model): In transformer, three different ways:
-            Case 1: come from previoys decoder layer
-            Case 2: come from the input embedding
-            Case 3: come from the output embedding (masked)
-
-        - **key** (batch, k_len, d_model): In transformer, three different ways:
-            Case 1: come from the output of the encoder
-            Case 2: come from the input embeddings
-            Case 3: come from the output embedding (masked)
-
-        - **value** (batch, v_len, d_model): In transformer, three different ways:
-            Case 1: come from the output of the encoder
-            Case 2: come from the input embeddings
-            Case 3: come from the output embedding (masked)
-
-        - **mask** (-): tensor containing indices to be masked
-
-    Returns: output, attn
-        - **output** (batch, output_len, dimensions): tensor containing the attended output features.
-        - **attn** (batch * num_heads, v_len): tensor containing the attention (alignment) from the encoder outputs.
-    """
-    def __init__(self, d_model: int = 512, num_heads: int = 8):
-        super(MultiHeadAttention, self).__init__()
-
-        assert d_model % num_heads == 0, "d_model % num_heads should be zero."
-
-        self.d_head = int(d_model / num_heads)
-        self.num_heads = num_heads
-        self.scaled_dot_attn = ScaledDotProductAttention(self.d_head)
-        self.query_proj = nn.Linear(d_model, self.d_head * num_heads)
-        self.key_proj = nn.Linear(d_model, self.d_head * num_heads)
-        self.value_proj = nn.Linear(d_model, self.d_head * num_heads)
-
-    def forward(
-            self,
-            query: Tensor,
-            key: Tensor,
-            value: Tensor,
-            mask: Optional[Tensor] = None
-    ) -> Tuple[Tensor, Tensor]:
-        batch_size = value.size(0)
-
-        query = self.query_proj(query).view(batch_size, -1, self.num_heads, self.d_head)  # BxQ_LENxNxD
-        key = self.key_proj(key).view(batch_size, -1, self.num_heads, self.d_head)      # BxK_LENxNxD
-        value = self.value_proj(value).view(batch_size, -1, self.num_heads, self.d_head)  # BxV_LENxNxD
-
-        query = query.permute(2, 0, 1, 3).contiguous().view(batch_size * self.num_heads, -1, self.d_head)  # BNxQ_LENxD
-        key = key.permute(2, 0, 1, 3).contiguous().view(batch_size * self.num_heads, -1, self.d_head)      # BNxK_LENxD
-        value = value.permute(2, 0, 1, 3).contiguous().view(batch_size * self.num_heads, -1, self.d_head)  # BNxV_LENxD
-
-        if mask is not None:
-            mask = mask.unsqueeze(1).repeat(1, self.num_heads, 1, 1)  # BxNxQ_LENxK_LEN
-
-        context, attn = self.scaled_dot_attn(query, key, value, mask)
-
-        context = context.view(self.num_heads, batch_size, -1, self.d_head)
-        context = context.permute(1, 2, 0, 3).contiguous().view(batch_size, -1, self.num_heads * self.d_head)  # BxTxND
-
-        return context, attn
-
-
 class RelativeMultiHeadAttention(nn.Module):
     """
     Multi-head attention with relative positional encoding.
@@ -466,9 +388,9 @@ class CustomizingAttention(nn.Module):
 
 ############### Fusion ###################
 class LinearFusion(nn.Module):
-    def __init__(self):
+    def __init__(self, final_dim):
         super(LinearFusion, self).__init__()
-        self.fc1 = nn.Linear(768, 768)
+        self.fc1 = nn.Linear(768, final_dim)
 
     def forward(self, img_features, cond):
         concat_features = torch.cat((img_features, cond), dim=1)
@@ -490,13 +412,14 @@ class SelfAttention(nn.Module):
     def forward(self, x: Tensor, y: Tensor) -> Tensor:
         query = self.query_proj(y) # y--> text
         N,C,W,H = query.size()
-        query = query.view(N, C, H*W).transpose(2,1)
+        query = query.contiguous().view(N, C, H*W) #.transpose(2,1)
 
         key = self.key_proj(x) # x-->image
-        key = key.view(N, C, -1)
+        key = key.contiguous().view(N, C, -1)
+        key = key.transpose(2,1) #N, HW, C
 
         # compute attention
-        attention = torch.bmm(query, key) / self.sqrt_dim 
+        attention = torch.bmm(key, query) / self.sqrt_dim 
 
         assert attention.size() == (N,H*W,H*W)
         attention = F.softmax(attention, dim=-1)
@@ -504,11 +427,13 @@ class SelfAttention(nn.Module):
         # g transform
         value = self.value_proj(x) #x --> image
         N, C, W, H = y.size()
-        value = value.view(N, C, -1)
+        value = value.contiguous().view(N, C, -1)
+        value = value.transpose(2, 1) #N, HW, C
         
         # final response
-        response = torch.bmm(value, attention.transpose(2,1))
-        response = response.view(N, C, W, H)
+        response = torch.bmm(attention, value)
+        response = response.permute(0, 2, 1) #N, C, HW
+        response = response.contiguous().view(N, C, W, H)
         return response
         
 
@@ -516,16 +441,15 @@ class CrossAttention(nn.Module):
     def __init__(self, channel_dim = 256, scale=4):
         super(CrossAttention,self).__init__()
         self.channel_dim = channel_dim
-        self.conv_1 = conv1x1(512, 256)
+        self.bn = nn.BatchNorm2d(256)
         self.sa = SelfAttention(channel_dim, scale)
-        self.avg_pool = nn.AvgPool2d(kernel_size = 4)
-        self.linear = nn.Linear(256, 64)
+        self.avg_pool = nn.AvgPool2d(kernel_size = 8)
+        #self.linear = nn.Linear(1024, 512)
 
     def forward(self, img: Tensor, word: Tensor) -> Tensor:
-        img = self.conv_1(img)
+        img = self.bn(img)
         word = torch.bmm(word, word.transpose(1, 2)) / np.sqrt(self.channel_dim) #batch x 256 x 256
-        word = self.linear(word) #batch x 256 x 64
-        word = word.unsqueeze(-1).view(word.size(0), word.size(1), 8, 8)
+        word = word.unsqueeze(-1).view(word.size(0), word.size(1), 16, 16)
 
         iw = self.sa(img, word)
         iw = self.avg_pool(iw)
@@ -534,8 +458,68 @@ class CrossAttention(nn.Module):
         return iw 
         
 
+
+class MultiHeadAttention(nn.Module):
+    def __init__(self, d_model: int = 32, num_heads: int = 1):
+        super(MultiHeadAttention, self).__init__()
+
+        assert d_model % num_heads == 0, "d_model % num_heads should be zero."
+
+        self.d_head = int(d_model / num_heads)
+        self.num_heads = num_heads
+        self.scaled_dot_attn = ScaledDotProductAttention(self.d_head)
+        self.query_proj = nn.Linear(d_model, self.d_head * num_heads)
+        self.key_proj = nn.Linear(d_model, self.d_head * num_heads)
+        self.value_proj = nn.Linear(d_model, self.d_head * num_heads)
+
+    def forward(
+            self,
+            query: Tensor,
+            key: Tensor,
+            value: Tensor,
+            mask: Optional[Tensor] = None
+    ) -> Tuple[Tensor, Tensor]:
+        batch_size = value.size(0)
+
+        query = self.query_proj(query).view(batch_size, -1, self.num_heads, self.d_head)  # BxQ_LENxNxD
+        key = self.key_proj(key).view(batch_size, -1, self.num_heads, self.d_head)      # BxK_LENxNxD
+        value = self.value_proj(value).view(batch_size, -1, self.num_heads, self.d_head)  # BxV_LENxNxD
+
+        query = query.permute(2, 0, 1, 3).contiguous().view(batch_size * self.num_heads, -1, self.d_head)  # BNxQ_LENxD
+        key = key.permute(2, 0, 1, 3).contiguous().view(batch_size * self.num_heads, -1, self.d_head)      # BNxK_LENxD
+        value = value.permute(2, 0, 1, 3).contiguous().view(batch_size * self.num_heads, -1, self.d_head)  # BNxV_LENxD
+
+        if mask is not None:
+            mask = mask.unsqueeze(1).repeat(1, self.num_heads, 1, 1)  # BxNxQ_LENxK_LEN
+
+        context, attn = self.scaled_dot_attn(query, key, value, mask)
+
+        context = context.view(self.num_heads, batch_size, -1, self.d_head)
+        context = context.permute(1, 2, 0, 3).contiguous().view(batch_size, -1, self.num_heads * self.d_head)  # BxTxND
+        return context
+
+
+class SentenceAttention(nn.Module):
+    def __init__(self):
+        super(SentenceAttention, self).__init__()
+
+        self.mha = MultiHeadAttention()
+        #self.linear = nn.Linear(1024, 512)
+
+    def forward(self, img: Tensor, sent: Tensor) -> Tensor:
+        bs = img.size(0)
+        img = img.contiguous().view(bs, 16, 32)
+        sent = sent.contiguous().view(bs, 8, 32)
+
+        gs = self.mha(sent, img, img)
+        gs = gs.view(bs, -1) #batch_size x 1024
+        #iw = self.linear(iw)
+        return gs 
+        
+
 if __name__ == "__main__":
-    x = torch.rand((16, 256, 16, 16))
-    y = torch.rand((16, 256, 23))
-    ca = CrossAttention()
-    summary(ca, [(256, 16, 16), (256, 23)], device="cpu")
+    #ca = CrossAttention()
+    #summary(ca, [(256, 16, 16), (256, 23)], device="cpu")
+
+    sa = SentenceAttention()
+    summary(sa, [(512,), (256,)], device="cpu")

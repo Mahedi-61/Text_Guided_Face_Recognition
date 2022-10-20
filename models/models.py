@@ -1,5 +1,3 @@
-import sys 
-import os.path as osp 
 import torch
 import torch.nn as nn
 import torch.nn.parallel
@@ -8,8 +6,8 @@ from torchvision import models
 import torch.utils.model_zoo as model_zoo
 import torch.nn.functional as F
 from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
-#from transformers import BertModel, BertConfig
-from transformers import AutoModel, AutoConfig
+from transformers import BertModel
+#from transformers import AutoModel, AutoConfig
 import torch.nn.functional as F
 from torchsummary import summary
 
@@ -140,9 +138,10 @@ class ResNetFace(nn.Module):
         x = self.layer1(x)
         x = self.layer2(x)
         x = self.layer3(x)
+        word_feat = x 
+
         x = self.layer4(x)
         x = self.bn4(x)
-        word_feat = x 
         x = self.dropout(x)
         x = x.view(x.size(0), -1)
         x = self.fc5(x)
@@ -158,17 +157,38 @@ def resnet_face18(use_se=True, **kwargs):
 
 
 ############### DAMSM Encoder-Decoder ###################
+class ProjectionHead(nn.Module):
+    def __init__(
+        self,
+        embedding_dim,
+        projection_dim,
+        dropout = 0.1
+    ):
+        super().__init__()
+        self.projection = nn.Linear(embedding_dim, projection_dim)
+        self.gelu = nn.GELU()
+        #self.fc = nn.Linear(projection_dim, projection_dim)
+        self.dropout = nn.Dropout(dropout)
+        #self.layer_norm = nn.LayerNorm(projection_dim)
+    
+    def forward(self, x):
+        projected = self.projection(x)
+        #x = self.gelu(projected)
+        #x = self.fc(x)
+        #x = self.dropout(x)
+        #x = x + projected
+        #x = self.layer_norm(x)
+        return projected
+
+
+
 class BERT_ENCODER(nn.Module):
     def __init__(self, args):
         super(BERT_ENCODER, self).__init__()
-        #self.num_bert_layer = args.num_bert_layer
-        #config = BertConfig.from_pretrained(args.bert_config, output_hidden_states = True)
-        #self.model = BertModel.from_pretrained(args.bert_config, config=config)
-        self.model = AutoModel.from_pretrained(args.bert_config) 
-
-        self.sentence_feat = nn.Linear(768, 256)
-        self.dropout = nn.Dropout(0.3)
-        self.word_feat = nn.Linear(768, 256)
+        self.model = BertModel.from_pretrained(args.bert_config)
+        #self.model = AutoModel.from_pretrained(args.bert_config)
+        for p in self.model.parameters():
+            p.requires_grad = args.trainable 
 
     def forward(self, captions, mask):
         outputs = self.model(captions, attention_mask=mask)
@@ -183,9 +203,20 @@ class BERT_ENCODER(nn.Module):
         #cls_embeddings = [get_CLS_embedding(embeddings[i]) for i in range(self.num_bert_layer)]
         #sent_emb = torch.mean(torch.stack(cls_embeddings, dim=1), dim=1) #batch_size x 768
         sent_emb = outputs[0][:,0,:]
-        sent_emb = self.sentence_feat(self.dropout(sent_emb)) #batch_size x 256
+        words_emb = outputs[0][:,1:,:] #outputs[0]
+        return words_emb, sent_emb
 
-        words_emb = self.word_feat(outputs[0][:,1:,:]) #outputs[0]
+
+
+class BERTHeading(nn.Module):
+    def __init__(self, args):
+        super(BERTHeading, self).__init__()
+        self.sentence_feat = ProjectionHead(embedding_dim=768, projection_dim=256)
+        self.word_feat = nn.Linear(768, 256)
+        
+    def forward(self, words_emb, sent_emb):
+        sent_emb = self.sentence_feat(sent_emb) #batch_size x 256
+        words_emb = self.word_feat(words_emb)
         words_emb = words_emb.transpose(1, 2)
 
         return words_emb, sent_emb
@@ -283,7 +314,7 @@ class RNN_ENCODER(nn.Module):
 class ResNetFace_ENCODER(nn.Module):
     def __init__(self, args):
         super(ResNetFace_ENCODER, self).__init__()
-        self.nef = 256 
+
         model_path = "weights/celeba/FE/resnet18_celeba_110.pth"
         model = ResNetFace(IRBlock, [2, 2, 2, 2], use_se= False)
         
@@ -293,10 +324,9 @@ class ResNetFace_ENCODER(nn.Module):
                 for key, value in weights.items()
             }
         model.load_state_dict(state_dict)
-
-        for param in model.parameters():
-            param.requires_grad = False
         print('Load pretrained model from ', model_path)
+        for p in model.parameters():
+            p.requires_grad = args.trainable 
 
         self.define_module(model)
 
@@ -313,8 +343,6 @@ class ResNetFace_ENCODER(nn.Module):
         self.dropout = model.dropout
         self.fc5 = model.fc5
         self.bn5 = model.bn5
-
-        self.emb_cnn_code = nn.Linear(512, self.nef)
 
     def forward(self, x):
         x = self.conv1(x)
@@ -334,8 +362,19 @@ class ResNetFace_ENCODER(nn.Module):
         x = self.fc5(x)
         x = self.bn5(x)
 
-        x = self.emb_cnn_code(self.prelu(x))
         return features, x
+
+
+
+class ResNetFace_Heading(nn.Module):
+    def __init__(self, args):
+        super(ResNetFace_Heading, self).__init__()
+        self.global_feat = ProjectionHead(embedding_dim=512, projection_dim=256)
+        
+    def forward(self, local_image, global_image):
+        global_image = self.global_feat(global_image) #batch_size x 256
+
+        return local_image, global_image 
 
 
 class CNN_ENCODER(nn.Module):
@@ -446,9 +485,4 @@ class CNN_ENCODER(nn.Module):
 
 
 if __name__ == "__main__":
-    b = BERT_ENCODER()
-    x = [[101]*24 for i in range(0, 4)]
-    y = [[1]*24 for i in range(0, 4)]
-    x = torch.tensor(x)
-    y = torch.tensor(y)
-    b(x, y)
+    from easydict import EasyDict as edict

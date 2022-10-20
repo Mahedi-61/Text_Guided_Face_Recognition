@@ -1,5 +1,4 @@
 from __future__ import print_function
-
 import os
 import sys
 import os.path as osp
@@ -10,22 +9,21 @@ import numpy as np
 
 import torch
 import torch.nn as nn
-import torch.optim as optim
 from torch.autograd import Variable
 import torchvision.transforms as transforms
 from tqdm import tqdm 
+import itertools
 
 ROOT_PATH = osp.abspath(osp.join(osp.dirname(osp.abspath(__file__)),  ".."))
 sys.path.insert(0, ROOT_PATH)
 
 from utils.utils import mkdir_p, merge_args_yaml
-from models.losses import sent_loss, words_loss
+from models.losses import clip_loss, sent_loss, words_loss
+from utils.prepare import prepare_dataloader, prepare_train_data_for_Bert, prepare_train_data
 
-from utils.prepare import prepare_dataloader
-from utils.train_dataset import prepare_train_data_for_Bert, prepare_train_data
+from models.models import (BERT_ENCODER, RNN_ENCODER, CNN_ENCODER, 
+                        BERTHeading, ResNetFace_ENCODER, ResNetFace_Heading)
 
-from models.models import BERT_ENCODER, RNN_ENCODER, CNN_ENCODER, ResNetFace_ENCODER
-from transformers import get_linear_schedule_with_warmup 
 
 
 def parse_args():
@@ -39,9 +37,8 @@ def parse_args():
     return args
 
 
-def save_encoders(image_encoder, text_encoder, 
-                  optimizerI, optimizerT, 
-                  lr_schedulerI, lr_schedulerT, args):
+def save_encoders(text_encoder, text_head, image_encoder, image_head, 
+                          optimizer, lr_scheduler, args):
 
     if args.using_BERT == True: folder = "Bert"
     elif args.using_BERT == False: folder = "BiLSTM"
@@ -53,26 +50,23 @@ def save_encoders(image_encoder, text_encoder,
 
     checkpoint_image_en = {
         'model': image_encoder.state_dict(),
-        'optimizer': optimizerI.state_dict(),
-        'lr_scheduler': lr_schedulerI.state_dict()
+        "head": image_head.state_dict()
     }
-    torch.save(checkpoint_image_en, '%s/arc_image_encoder%d.pth' % 
-                                    (save_dir, args.current_epoch))
+    torch.save(checkpoint_image_en, '%s/arc_image_encoder_%s_%d.pth' % 
+                                    (save_dir, args.en_type, args.current_epoch))
 
     checkpoint_text_en = {
         'model': text_encoder.state_dict(),
-        'optimizer': optimizerT.state_dict(),
-        'lr_scheduler': lr_schedulerT.state_dict()
+        'head': text_head.state_dict(),
+        'optimizer': optimizer.state_dict(),
+        'lr_scheduler': lr_scheduler.state_dict()
     }
-    torch.save(checkpoint_text_en, '%s/arc_text_encoder%d.pth' % 
-                                    (save_dir, args.current_epoch))
+    torch.save(checkpoint_text_en, '%s/arc_text_encoder_%s_%d.pth' % 
+                                    (save_dir, args.en_type, args.current_epoch))
 
 
 
-def train(dataloader, rnn_model, cnn_model, optimizerT, optimizerI, args):
-    cnn_model.train()
-    rnn_model.train()
-
+def train(dataloader,  text_encoder, text_head, image_encoder, image_head, optimizer, args):
     batch_size = args.train_batch_size 
     labels = prepare_labels(batch_size)
     epoch = args.current_epoch 
@@ -82,31 +76,26 @@ def train(dataloader, rnn_model, cnn_model, optimizerT, optimizerI, args):
     w_total_loss0 = 0
     w_total_loss1 = 0
     total_length = len(dataloader)
+    total_cl_loss = 0
 
     loop = tqdm(total = total_length)
-    for step, data in enumerate(dataloader, 0):
-        rnn_model.zero_grad()
-        cnn_model.zero_grad()
-        
+    for step, data in enumerate(dataloader, 0):        
         if args.using_BERT == True:
-            imgs, sent_emb, words_emb, keys, class_ids = \
-                    prepare_train_data_for_Bert(data, rnn_model)
+            imgs, words_emb, sent_emb, keys, class_ids = \
+                    prepare_train_data_for_Bert(data, text_encoder, text_head)
             cap_lens = None 
 
         if args.using_BERT == False:
-            imgs, sent_emb, words_emb, keys, class_ids, cap_lens = \
-                    prepare_train_data(data, rnn_model)
+            imgs, words_emb, sent_emb, keys, class_ids, cap_lens = \
+                    prepare_train_data(data, text_encoder, text_head)
         
 
         # words_features: batch_size x nef x 17 x 17
         # sent_code: batch_size x nef
-        words_features, sent_code = cnn_model(imgs)
+        words_features, sent_code = image_encoder(imgs)
+        words_features, sent_code = image_head(words_features, sent_code )
 
-        # --> batch_size x nef x 17*17
-        nef, att_sze = words_features.size(1), words_features.size(2)
-        # words_features = words_features.view(batch_size, nef, -1)
- 
-        
+        # calculate loss 
         w_loss0, w_loss1, attn_maps = words_loss(words_features, words_emb, labels,
                                             cap_lens, class_ids.numpy(), batch_size, args)
         w_total_loss0 += w_loss0.data
@@ -117,15 +106,18 @@ def train(dataloader, rnn_model, cnn_model, optimizerT, optimizerI, args):
         damsm_loss += s_loss0 + s_loss1 
         s_total_loss0 += s_loss0.data
         s_total_loss1 += s_loss1.data
+
+        cl = clip_loss(sent_emb, sent_code, args)        
+        damsm_loss += cl
+
+        optimizer.zero_grad() 
         damsm_loss.backward()
+        optimizer.step()
 
         #`clip_grad_norm` helps prevent the exploding gradient problem in RNNs / LSTMs.        
-        torch.nn.utils.clip_grad_norm_(rnn_model.parameters(), args.clip_max_norm)
-        #torch.nn.utils.clip_grad_norm_(cnn_model.parameters(), args.clip_max_norm)
+        #torch.nn.utils.clip_grad_norm_(rnn_model.parameters(), args.clip_max_norm)
 
-        optimizerT.step()
-        optimizerI.step()
-
+        total_cl_loss += cl 
         # update loop information
         loop.update(1)
         loop.set_description(f'Training Epoch [{epoch}/{args.max_epoch}]')
@@ -141,44 +133,46 @@ def train(dataloader, rnn_model, cnn_model, optimizerT, optimizerI, args):
     print('| epoch {:3d} | s_loss {:5.2f} {:5.2f} | w_loss {:5.2f} {:5.2f}'.
             format(args.current_epoch, s_cur_loss0, s_cur_loss1, w_cur_loss0, w_cur_loss1))
 
+    print("Total clip loss: ", total_cl_loss / total_length)
 
 
-def evaluate(dataloader, rnn_model, cnn_model, args):
-    cnn_model.eval()
-    rnn_model.eval()
+
+def evaluate(dataloader, text_encoder, text_head, image_encoder, image_head, args):
+    text_encoder.eval()
+    text_head.eval() 
+    image_encoder.eval()
+    image_head.eval()
     s_total_loss = 0
     w_total_loss = 0
 
     batch_size = args.test_batch_size
     labels = prepare_labels(batch_size) 
-    total_length = len(dataloader)
-    loop = tqdm(total = total_length)
 
-    for step, data in enumerate(dataloader, 0):
-        #rnn_model.zero_grad()
-        #cnn_model.zero_grad()
-        
-        if args.using_BERT == True:
-            imgs, sent_emb, words_emb, keys, class_ids = \
-                    prepare_train_data_for_Bert(data, rnn_model)
-            cap_lens = None 
+    with torch.no_grad():
+        for step, data in enumerate(dataloader, 0):
+            if args.using_BERT == True:
+                imgs, words_emb, sent_emb, keys, class_ids = \
+                        prepare_train_data_for_Bert(data, text_encoder, text_head)
+                cap_lens = None 
 
-        if args.using_BERT == False:
-            imgs, sent_emb, words_emb, keys, class_ids, cap_lens = \
-                    prepare_train_data(data, rnn_model)
+            if args.using_BERT == False:
+                imgs, words_emb, sent_emb, keys, class_ids, cap_lens = \
+                        prepare_train_data(data, text_encoder, text_head)
 
-        # words_features: batch_size x nef x 17 x 17
-        # sent_code: batch_size x nef
-        words_features, sent_code = cnn_model(imgs)
-        w_loss0, w_loss1, attn_maps = words_loss(words_features, words_emb, labels,
-                                    cap_lens, class_ids.numpy(), batch_size, args)
+            # words_features: batch_size x nef x 17 x 17
+            # sent_code: batch_size x nef
+            words_features, sent_code = image_encoder(imgs)
+            words_features, sent_code = image_head(words_features, sent_code)
 
-        w_total_loss += (w_loss0 + w_loss1).data
-        s_loss0, s_loss1 = sent_loss(sent_code, sent_emb, labels, class_ids.numpy(), batch_size, args)
-        s_total_loss += (s_loss0 + s_loss1).data
+            w_loss0, w_loss1, attn_maps = words_loss(words_features, words_emb, labels,
+                                        cap_lens, class_ids.numpy(), batch_size, args)
 
-        if step == 200:
-            break
+            w_total_loss += (w_loss0 + w_loss1).data
+            s_loss0, s_loss1 = sent_loss(sent_code, sent_emb, labels, class_ids.numpy(), batch_size, args)
+            s_total_loss += (s_loss0 + s_loss1).data
+
+            if step == 300:
+                break
 
     s_cur_loss = s_total_loss / step
     w_cur_loss = w_total_loss / step
@@ -229,41 +223,41 @@ def build_models_with_prev_weight(args):
 
 
 def build_models(args):
+    # building image encoder
+    image_encoder = ResNetFace_ENCODER(args)
+    image_encoder = nn.DataParallel(image_encoder, device_ids=args.gpu_id).cuda()
+    image_head = ResNetFace_Heading(args)
+    image_head = nn.DataParallel(image_head, device_ids=args.gpu_id).cuda() 
+
     # building text encoder
     if args.using_BERT == True:
         text_encoder = BERT_ENCODER(args)
         text_encoder = nn.DataParallel(text_encoder, device_ids=args.gpu_id).cuda()
-        optimizerT = torch.optim.AdamW(text_encoder.parameters(), 
-                                       lr = args.lr_text_bert,
-                                       eps = 1e-8)
+        text_head = BERTHeading(args)
+        text_head = nn.DataParallel(text_head, device_ids=args.gpu_id).cuda()
+
+        params = [
+            {"params": image_encoder.parameters(), "lr": args.lr_image},
+            {"params": text_encoder.parameters(), "lr": args.lr_text_bert},
+            {"params": itertools.chain(text_head.parameters(), image_head.parameters()),
+             "lr": args.lr_head, "weight_decay": args.weight_decay}
+        ]
 
     elif args.using_BERT == False:
         text_encoder = RNN_ENCODER(args, nhidden=args.embedding_dim)
         text_encoder = text_encoder.cuda()
-        optimizerT = torch.optim.AdamW(text_encoder.parameters(), 
-                                       lr = args.lr_text)
 
+        params = [
+            {"params": image_encoder.parameters(), "lr": args.lr_image},
+            {"params": text_encoder.parameters(), "lr": args.lr_text},
+            {"params": image_head.parameters(), 
+             "lr": args.lr_head, "weight_decay": args.weight_decay}
+        ]
 
-    total_steps = args.len_train_dl * args.max_epoch
-    lr_schedulerT = get_linear_schedule_with_warmup(optimizerT, 
-                                                num_warmup_steps = 0, 
-                                                num_training_steps = total_steps)
+    optimizer = torch.optim.AdamW(params, weight_decay=0.0)
 
-    # building image encoder
-    image_encoder = ResNetFace_ENCODER(args)
-    image_encoder = nn.DataParallel(image_encoder, device_ids=args.gpu_id).cuda()
-
-    para = []
-    for v in image_encoder.parameters():
-        if v.requires_grad:
-            para.append(v)
-
-    optimizerI = torch.optim.Adam(para, 
-                                    lr = args.lr_image) 
-
-    lr_schedulerI = torch.optim.lr_scheduler.StepLR(optimizerI, 
-                                    args.lr_drop, 
-                                    gamma=args.lr_gamma)
+    lr_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer, mode="min", patience=args.patience, factor=args.factor)
         
     
     # load from checkpoint
@@ -274,20 +268,24 @@ def build_models(args):
 
         state_dict = torch.load(args.resume_model_path)
         text_encoder.load_state_dict(state_dict['model'])
-        optimizerT.load_state_dict(state_dict['optimizer'])
-        lr_schedulerT.load_state_dict(state_dict['lr_scheduler'])
+
+        if args.using_BERT == True:
+            text_head.load_state_dict(state_dict["head"])
+        else:
+            text_head = None 
+
+        optimizer.load_state_dict(state_dict['optimizer'])
+        lr_scheduler.load_state_dict(state_dict['lr_scheduler'])
 
         print('Load ', args.resume_model_path)
         name = args.resume_model_path.replace('text_encoder', 'image_encoder')
         state_dict = torch.load(name)
 
         image_encoder.load_state_dict(state_dict['model'])
-        optimizerI.load_state_dict(state_dict['optimizer'])
-        lr_schedulerI.load_state_dict(state_dict['lr_scheduler'])
+        image_head.load_state_dict(state_dict["head"])
         print('Load ', name)
 
-    return (text_encoder, image_encoder, optimizerT, optimizerI, 
-            lr_schedulerT, lr_schedulerI, start_epoch)
+    return (text_encoder, text_head, image_encoder, image_head, optimizer, lr_scheduler, start_epoch)
 
 
 
@@ -313,11 +311,11 @@ def main(args):
                             (train_ds.n_words, train_ds.embeddings_num))
         args.vocab_size = train_ds.n_words
 
-
+    
     # Build model
     if args.prev_weight == False:
-        text_encoder, image_encoder, optimizerT, optimizerI, \
-            lr_schedulerT, lr_schedulerI, start_epoch= build_models(args)
+        text_encoder, text_head, image_encoder, image_head, optimizer, \
+                            lr_scheduler, start_epoch = build_models(args)
     
     elif args.prev_weight == True:
         text_encoder, image_encoder, optimizerT, optimizerI, \
@@ -325,28 +323,29 @@ def main(args):
 
 
     for epoch in range(start_epoch, args.max_epoch + 1):
-        args.current_epoch = epoch 
-        train(train_dl, text_encoder, image_encoder, optimizerT, optimizerI, args)
+        args.current_epoch = epoch
+        text_encoder.train()
+        text_head.train() 
+        image_encoder.train()
+        image_head.train()
+
+        train(train_dl, text_encoder, text_head, image_encoder, image_head, optimizer, args)
         
         if ((args.do_test == True) and (epoch % args.test_interval == 0)):
             print("Let's evaluate the model")
 
-            s_loss, w_loss = evaluate(valid_dl, text_encoder, image_encoder, args)
+            s_loss, w_loss = evaluate(valid_dl, text_encoder, text_head, image_encoder, image_head, args)
             print('| end epoch {:3d} | valid loss {:5.2f} {:5.2f}'.format(epoch, s_loss, w_loss))
-        
-        print('Learning rates: lr_i %.7f, lr_t %.7f' 
-            % (optimizerI.param_groups[0]['lr'], optimizerT.param_groups[0]['lr']))
-        
-        lr_schedulerI.step()
-        lr_schedulerT.step()
 
         if (epoch % args.save_interval == 0 or epoch == args.max_epoch):
-            print("saving image and text encoder")
-            save_encoders(image_encoder, text_encoder, 
-                          optimizerI, optimizerT, 
-                          lr_schedulerI, lr_schedulerT, args)
-        print('-' * 89)
-    
+            print("saving image and text encoder\n")
+            save_encoders(text_encoder, text_head, image_encoder, image_head, 
+                          optimizer, lr_scheduler, args)
+
+
+        lr_scheduler.step(s_loss)
+
+
 
 if __name__ == "__main__":
     args = merge_args_yaml(parse_args())

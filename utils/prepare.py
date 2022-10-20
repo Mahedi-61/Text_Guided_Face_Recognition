@@ -1,13 +1,11 @@
-import os.path as osp
-
 import torch
 import torchvision.transforms as transforms
 from utils.train_dataset import TextImgTrainDataset
 from utils.test_dataset import TextImgTestDataset 
 
-from utils.utils import load_model_weights, load_only_model_for_image_rec
-from models.models import RNN_ENCODER, ResNetFace_ENCODER, BERT_ENCODER, resnet_face18
-from models.fusion_nets import LinearFusion, CrossAttention 
+from utils.utils import load_model_weights, load_pretrained_arch_model
+from models.models import RNN_ENCODER, BERTHeading, ResNetFace_ENCODER, BERT_ENCODER, resnet_face18
+from models.fusion_nets import LinearFusion, CrossAttention, SentenceAttention
 from utils.dataset_utils import *
 
 
@@ -28,17 +26,22 @@ def prepare_image_encoder(args):
     return image_encoder
 
 
-
 def prepare_text_encoder(args):
     device = args.device
 
     # text encoder
     print("loading text encoder")
+    
     if args.using_BERT == True:
         text_encoder = BERT_ENCODER(args)
         text_encoder = torch.nn.DataParallel(text_encoder, device_ids=args.gpu_id).cuda()
         state_dict = torch.load(args.damsm_encoder_path)
         text_encoder.load_state_dict(state_dict['model'])
+
+        text_head = BERTHeading(args)
+        text_head = torch.nn.DataParallel(text_head, device_ids=args.gpu_id).cuda()
+        text_head.load_state_dict(state_dict['head'])
+
 
     elif args.using_BERT == False:
         text_encoder = RNN_ENCODER(args, nhidden=args.embedding_dim)
@@ -49,89 +52,99 @@ def prepare_text_encoder(args):
     for p in text_encoder.parameters():
         p.requires_grad = False
 
+    for p in text_head.parameters():
+        p.requires_grad = False 
+
     text_encoder.eval()
-    return text_encoder
+    text_head.eval()
+    return text_encoder, text_head
 
 
 
-def prepare_models(args):
+def prepare_model(args):
     device = args.device
 
     #archface model for image
     model = resnet_face18(use_se=args.use_se)
     model = torch.nn.DataParallel(model, device_ids=args.gpu_id)
-    model = load_only_model_for_image_rec(model, args.load_model_path, args.prev_weight)
+    model = load_pretrained_arch_model(model, args.load_model_path)
     model.to(device)
 
     for p in model.parameters():
         p.requires_grad = False
     model.eval()
+    return model 
 
-    # GAN models
 
+def prepare_fusion_net(args):
+    # fusion models
     if args.fusion_type == "linear":
-        net = LinearFusion()
+        net = LinearFusion(final_dim = 512)
+
     elif args.fusion_type == "cross_attention":
         net = CrossAttention(channel_dim = 256)
 
-    net = torch.nn.DataParallel(net, device_ids=args.gpu_id).to(device)
-    return model, net
+    elif args.fusion_type == "sentence_attention":
+        print("fusion type: sentence attention")
+        net = SentenceAttention()
+
+    net = torch.nn.DataParallel(net, device_ids=args.gpu_id).to(args.device)
+    return net
 
 
 
 ################ data ##############
-def get_one_batch_train_data(dataloader, text_encoder):
+def get_one_batch_train_data(dataloader, text_encoder, text_head):
     data = next(iter(dataloader))
-    imgs, sent_emb, words_embs, keys, label = prepare_train_data(data, text_encoder)
+    imgs, words_embs, sent_emb, keys, label = prepare_train_data(data, text_encoder, text_head)
     return imgs, words_embs, sent_emb
 
 
-def prepare_train_data(data, text_encoder):
+def prepare_train_data(data, text_encoder, text_head):
     imgs, captions, caption_lens, keys, label = data
     captions, sorted_cap_lens, sorted_cap_idxs = sort_sents(captions, caption_lens)
-    sent_emb, words_embs = encode_tokens(text_encoder, captions, sorted_cap_lens)
+    words_embs, sent_emb = encode_tokens(text_encoder, text_head, captions, sorted_cap_lens)
     sent_emb = rm_sort(sent_emb, sorted_cap_idxs)
     words_embs = rm_sort(words_embs, sorted_cap_idxs)
-    imgs = Variable(imgs).cuda()
-    return imgs, sent_emb, words_embs, keys, label, caption_lens
+    return imgs, words_embs, sent_emb, keys, label, caption_lens
 
 
-def prepare_train_data_for_Bert(data, text_encoder):
+def prepare_train_data_for_Bert(data, text_encoder, text_head):
     imgs, caps, masks, keys, cls_ids = data
-    sent_emb, words_embs = encode_Bert_tokens(text_encoder, caps, masks)
-    imgs = Variable(imgs).cuda()
-    return imgs, sent_emb, words_embs, keys, cls_ids
+    words_embs, sent_emb = encode_Bert_tokens(text_encoder, text_head, caps, masks)
+    return imgs, words_embs, sent_emb, keys, cls_ids
 
 
 def get_one_batch_train_data_Bert(dataloader):
     data = next(iter(dataloader))
-    imgs, sent_emb, words_emb, keys, cls_ids = prepare_train_data_for_Bert(data)
+    imgs, words_emb, sent_emb, keys, cls_ids = prepare_train_data_for_Bert(data)
     return imgs, words_emb, sent_emb
 
 
-def prepare_test_data(data, text_encoder):
+def prepare_test_data(data, text_encoder, text_head):
     img1, img2, cap1, cap2, cap_len1, cap_len2, pair_label = data
 
     cap1, sorted_cap_len1, sorted_cap_idxs = sort_sents(cap1, cap_len1)
-    sent_emb1, words_emb1 = encode_tokens(text_encoder, cap1, sorted_cap_len1)
+    words_emb1, sent_emb1 = encode_tokens(text_encoder, text_head, cap1, sorted_cap_len1)
     sent_emb1 = rm_sort(sent_emb1, sorted_cap_idxs)
     words_emb1 = rm_sort(words_emb1, sorted_cap_idxs)
 
     cap2, sorted_cap_len2, sorted_cap_idxs = sort_sents(cap2, cap_len2)
-    sent_emb2, words_emb2 = encode_tokens(text_encoder, cap2, sorted_cap_len2)
+    words_emb2, sent_emb2 = encode_tokens(text_encoder, text_head, cap2, sorted_cap_len2)
     sent_emb2 = rm_sort(sent_emb2, sorted_cap_idxs)
     words_emb2 = rm_sort(words_emb2, sorted_cap_idxs)
 
-    return img1, img2, sent_emb1, sent_emb2, words_emb1, words_emb2, pair_label  
+    return img1, img2, words_emb1, words_emb2, sent_emb1, sent_emb2, pair_label 
 
 
-def prepare_test_data_Bert(data, text_encoder):
+
+def prepare_test_data_Bert(data, text_encoder, text_head):
     img1, img2, caption1, caption2, mask1, mask2, pair_label = data
 
-    sent_emb1, words_emb1 = encode_Bert_tokens(text_encoder, caption1, mask1)
-    sent_emb2, words_emb2  = encode_Bert_tokens(text_encoder, caption2, mask2)
+    words_emb1, sent_emb1 = encode_Bert_tokens(text_encoder, text_head, caption1, mask1)
+    words_emb2, sent_emb2  = encode_Bert_tokens(text_encoder, text_head, caption2, mask2)
 
-    return img1, img2, sent_emb1, sent_emb2, words_emb1, words_emb2, pair_label 
+    return img1, img2, words_emb1, words_emb2, sent_emb1, sent_emb2, pair_label 
 
 
 

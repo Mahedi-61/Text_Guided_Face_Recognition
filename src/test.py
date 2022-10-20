@@ -9,10 +9,9 @@ import torch
 
 ROOT_PATH = osp.abspath(osp.join(osp.dirname(osp.abspath(__file__)),  ".."))
 sys.path.insert(0, ROOT_PATH)
-from utils.utils import merge_args_yaml
-from utils.utils import load_model
-from utils.prepare import prepare_dataloader, prepare_models, prepare_text_encoder
-from utils.modules import test 
+from utils.utils import merge_args_yaml, load_fusion_net
+from utils.prepare import prepare_dataloader, prepare_model, prepare_text_encoder, prepare_fusion_net
+from utils.modules import test
 
 
 def parse_args():
@@ -28,18 +27,24 @@ def parse_args():
 def main(args):
     test_dl, test_ds = prepare_dataloader(args, split="test", transform=None)
 
-    args.vocab_size = test_ds.n_words
-    text_encoder = prepare_text_encoder(args)
-    model, net = prepare_models(args)
+    if args.using_BERT == False:
+        args.vocab_size = test_ds.n_words
 
+    text_encoder, text_head = prepare_text_encoder(args)
+    model = prepare_model(args)
     
-    # load from checkpoint
-    print("loading checkpoint; epoch: ", args.resume_epoch)
-    net = load_model(net, args.resume_model_path)
+    if args.fusion_type == "concat":
+        net = None
+
+    else:
+        net = prepare_fusion_net(args)
+        # load from checkpoint
+        print("loading checkpoint; epoch: ", args.resume_epoch)
+        net = load_fusion_net(net, args.resume_model_path)
 
     #pprint.pprint(args)
     print("Start Testing")
-    test(test_dl, model, net, text_encoder, args)
+    test(test_dl, model, net, text_encoder, text_head, args)
 
 
 if __name__ == "__main__":

@@ -1,11 +1,15 @@
+import sys
 import os.path as osp
 from scipy import linalg
 from sklearn import metrics
 import numpy as np
 import torch
 import torch.nn as nn
-from utils.prepare import prepare_test_data, prepare_test_data_Bert
 from tqdm import tqdm 
+
+ROOT_PATH = osp.abspath(osp.join(osp.dirname(osp.abspath(__file__)),  ".."))
+sys.path.insert(0, ROOT_PATH)
+from utils.prepare import prepare_test_data, prepare_test_data_Bert
 
 
 ############   modules   ############
@@ -48,7 +52,8 @@ def calculate_scores(y_score, y_true):
     return str_scores 
 
 
-def test(test_dl, model, net, text_encoder, args):
+
+def test(test_dl, model, net, text_encoder, text_head, args):
     device = args.device
     net = net.eval()
     preds = []
@@ -57,10 +62,10 @@ def test(test_dl, model, net, text_encoder, args):
     loop = tqdm(total=len(test_dl))
     for step, data in enumerate(test_dl, 0):
         if args.using_BERT == True: 
-            img1, img2, sent_emb1, sent_emb2, words_emb1, words_emb2, pair_label = prepare_test_data_Bert(data, text_encoder)
+            img1, img2, words_emb1, words_emb2, sent_emb1, sent_emb2, pair_label = prepare_test_data_Bert(data, text_encoder, text_head)
 
         elif args.using_BERT == False:
-            img1, img2, sent_emb1, sent_emb2, words_emb1, words_emb2, pair_label = prepare_test_data(data, text_encoder)
+            img1, img2, words_emb1, words_emb2, sent_emb1, sent_emb2, pair_label = prepare_test_data(data, text_encoder, text_head)
         
         # upload to cuda
         img1 = img1.to(device).requires_grad_()
@@ -68,24 +73,28 @@ def test(test_dl, model, net, text_encoder, args):
         pair_label = pair_label.to(device)
 
         # get global and local image features from arc face model
-        img_features,  word_features = get_features(model, img1)
-        img_features, word_features = get_features(model, img2)
+        global_feat1,  local_feat1 = get_features(model, img1)
+        global_feat2,  local_feat2 = get_features(model, img2)
 
-        if args.fusion_type == "linear":
-            sent_emb1 = sent_emb1.to(device).requires_grad_()
-            sent_emb2 = sent_emb2.to(device).requires_grad_()
 
-            out1 = net(img_features, sent_emb1)
-            out2 = net(img_features, sent_emb2)
+        # sentence & word featurs 
+        if args.fusion_type == "concat":
+            out1 =  torch.cat((global_feat1, sent_emb1), dim=1) 
+            out2 =  torch.cat((global_feat2, sent_emb2), dim=1)
+
+        elif args.fusion_type == "linear" or args.fusion_type == "sentence_attention":
+            out1 =  net(global_feat1, sent_emb1)
+            out2 =  net(global_feat2, sent_emb2)
 
         elif args.fusion_type == "cross_attention":
             words_emb1 = words_emb1.to(device).requires_grad_()
             words_emb2 = words_emb2.to(device).requires_grad_()
 
-            out1 = net(word_features, words_emb1)
-            out2 = net(word_features, words_emb2)
+            out1 = net(local_feat1, words_emb1)
+            out2 = net(local_feat2, words_emb2)
 
-        del img_features, word_features
+        del local_feat1, local_feat2, words_emb1, words_emb2
+
         cosine_sim = nn.CosineSimilarity(dim=1, eps=1e-6)
         pred = cosine_sim(out1, out2)
         preds += pred.data.cpu().tolist()
@@ -100,30 +109,3 @@ def test(test_dl, model, net, text_encoder, args):
     str_socres = calculate_scores(preds, labels)
     print("accuracy: %0.4f; threshold %0.4f" %(best_acc, best_th))
     return str_socres
-
-
-def predict_loss(predictor, img_feature, text_feature, negtive):
-    output = predictor(img_feature, text_feature)
-    err = hinge_loss(output, negtive)
-    return output,err
-
-
-def hinge_loss(output, negtive):
-    if negtive==False:
-        err = torch.nn.ReLU()(1.0 - output).mean()
-    else:
-        err = torch.nn.ReLU()(1.0 + output).mean()
-    return err
-
-
-def logit_loss(output, negtive):
-    batch_size = output.size(0)
-    real_labels = torch.FloatTensor(batch_size,1).fill_(1).to(output.device)
-    fake_labels = torch.FloatTensor(batch_size,1).fill_(0).to(output.device)
-    output = nn.Sigmoid()(output)
-
-    if negtive==False:
-        err = nn.BCELoss()(output, real_labels)
-    else:
-        err = nn.BCELoss()(output, fake_labels)
-    return err

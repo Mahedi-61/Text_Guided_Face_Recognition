@@ -67,7 +67,7 @@ def words_loss(img_features, words_emb, labels, cap_lens, class_ids, batch_size,
     att_maps = []
     similarities = []
 
-    if args.using_BERT == False:
+    if not args.using_BERT:
         cap_lens = cap_lens.data.tolist()
 
     for i in range(batch_size):
@@ -131,8 +131,6 @@ def words_loss(img_features, words_emb, labels, cap_lens, class_ids, batch_size,
     return loss0, loss1, att_maps
 
 
-
-
 def KL_loss(mu, logvar):
     # -0.5 * sum(1 + log(sigma^2) - mu^2 - sigma^2)
     KLD_element = mu.pow(2).add_(logvar.exp()).mul_(-1).add_(1).add_(logvar)
@@ -140,9 +138,30 @@ def KL_loss(mu, logvar):
     return KLD
 
 
+def clip_loss(text_embeddings, image_embeddings, args):
+    logits = (text_embeddings @ image_embeddings.T) / args.temperature
+    images_similarity = image_embeddings @ image_embeddings.T
+    texts_similarity = text_embeddings @ text_embeddings.T
+
+    targets = F.softmax(
+        (images_similarity + texts_similarity) / 2 * args.temperature, dim=-1)
+
+    texts_loss = cross_entropy(logits, targets, reduction='none')
+    images_loss = cross_entropy(logits.T, targets.T, reduction='none')
+    loss =  (images_loss + texts_loss) / 2.0 # shape: (batch_size)
+    return loss.mean()
+
+
+def cross_entropy(preds, targets, reduction='none'):
+    log_softmax = nn.LogSoftmax(dim=-1)
+    loss = (-targets * log_softmax(preds)).sum(1)
+    if reduction == "none":
+        return loss
+    elif reduction == "mean":
+        return loss.mean()
+
 
 def word_level_correlation(img_features, words_emb, cap_lens, batch_size, class_ids, labels, args):
-
     masks = []
     att_maps = []
     result = 0

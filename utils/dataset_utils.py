@@ -9,8 +9,8 @@ import pandas as pd
 from PIL import Image
 import _pickle as pickle
 import gc
-#from transformers import BertTokenizerFast as BertTokenizer
-from transformers import AutoTokenizer
+from transformers import BertTokenizerFast as BertTokenizer
+#from transformers import AutoTokenizer
 
 
 def sort_sents(captions, caption_lens):
@@ -23,26 +23,28 @@ def sort_sents(captions, caption_lens):
 
 
 
-def encode_tokens(text_encoder, caption, cap_lens):
+def encode_tokens(text_encoder, text_head, caption, cap_lens):
     with torch.no_grad():
         if hasattr(text_encoder, 'module'):
             hidden = text_encoder.module.init_hidden(caption.size(0))
         else:
             hidden = text_encoder.init_hidden(caption.size(0))
+
         words_embs, sent_emb = text_encoder(caption, cap_lens, hidden)
-        words_embs, sent_emb = words_embs.detach(), sent_emb.detach()
-    return sent_emb, words_embs 
+        words_embs, sent_emb = text_head(words_embs, sent_emb)
+    return words_embs.detach(), sent_emb.detach()
 
 
 
-def encode_Bert_tokens(text_encoder, caption, mask):
+def encode_Bert_tokens(text_encoder, text_head, caption, mask):
     caption = Variable(caption).cuda()
     mask = Variable(mask).cuda()
 
     with torch.no_grad():
          words_emb, sent_emb = text_encoder(caption, mask)
+         words_emb, sent_emb = text_head(words_emb, sent_emb)
 
-    return sent_emb.detach(), words_emb.detach() 
+    return words_emb.detach(), sent_emb.detach()
 
 
 
@@ -62,11 +64,11 @@ def get_imgs(img_path, config, bbox=None, transform=None):
             transforms.ToTensor(),
             transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))])
     """
-    if config == "FE" or config == "DAMSM":
-        img = Image.open(img_path).convert('L')
-        norm = transforms.Compose([
-            transforms.ToTensor(),
-            transforms.Normalize((0.5), (0.5))])
+
+    img = Image.open(img_path).convert('L')
+    norm = transforms.Compose([
+        transforms.ToTensor(),
+        transforms.Normalize((0.5), (0.5))])
 
     width, height = img.size
     if bbox is not None:
@@ -112,7 +114,7 @@ def load_bbox(data_dir, split):
 def load_captions_Bert(data_dir, filenames, args):
     # convert the raw text into a list of tokens.
     # attention_mask (which tokens should be used by the model 1 - use or 0 - don’t use).
-    tokenizer = AutoTokenizer.from_pretrained(args.bert_config)
+    tokenizer = BertTokenizer.from_pretrained(args.bert_config)
     all_captions = []
     all_attention_mask = []
 

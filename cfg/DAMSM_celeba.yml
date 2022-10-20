@@ -4,31 +4,35 @@ dataset_name: celeba
 data_dir: ./data/celeba
 checkpoints_path: ./checkpoints
 test_pair_list: ./data/celeba/celeba/celeba_test_10_pair.txt  
-resume_model_path: ./checkpoints/celeba/DAMSM/Bert/arc_text_encoder2.pth
+resume_model_path: ./checkpoints/celeba/DAMSM/Bert/arc_text_encoder1.pth
 resume_epoch: 1
 
 # machine setup
-num_workers: 2 
+num_workers: 6 
 gpu_id: [0, 1]
 manual_seed: 100
 CUDA: True
 
 # model arch 
 img_size: 128  #299 for Inception
-lr_text_bert:  0.00005  #5e-4 good but slow convergence; 1e-3 too fast
+lr_text_bert:  0.00001  #(1e-5) because 5e-4 good but slow convergence; 1e-3 too fast
 lr_text: 0.0001
-lr_image : 0.0009
-lr_drop: 200
-lr_gamma: 0.1
-weight_decay: 0.0001
+lr_image : 0.0001 #(1e-4)
+lr_head: 0.001
+weight_decay: 0.001 #(1e-3)
 clip_max_norm: 1.0
 
 #trainng settings
 test_batch_size: 32
 train_batch_size: 32 
-max_epoch: 5
+max_epoch: 10
 test_interval: 1
 save_interval: 1
+patience: 1
+factor: 0.8
+temperature: 1.0
+trainable: True 
+
 
 # flags
 do_test: True  
@@ -43,12 +47,13 @@ TRAIN:
         GAMMA3: 10.0
 
 using_BERT: True      
-rnn_type: LSTM #GRU  
-bert_words_num: 24
+rnn_type: LSTM #GRU
+en_type: "bert"   
+bert_words_num: 21
 lstm_words_num: 18 
 embedding_dim: 256
 captions_per_image: 10
-bert_config: distilbert-base-uncased #bert-base-uncased 
+bert_config:  bert-base-uncased #distilbert-base-uncased 
 
 #for inception image encodeer
 #1. chnage img_size = 299

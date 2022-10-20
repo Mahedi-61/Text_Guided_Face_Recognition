@@ -11,7 +11,7 @@ from tqdm import tqdm
 ROOT_PATH = osp.abspath(osp.join(osp.dirname(osp.abspath(__file__)),  ".."))
 sys.path.insert(0, ROOT_PATH)
 from utils.utils import merge_args_yaml
-from utils.prepare import prepare_dataloader, prepare_models
+from utils.prepare import prepare_dataloader, prepare_model
 from utils.modules import * 
 
 
@@ -28,8 +28,8 @@ def test(test_dl, model, args):
         img2 = img2.to(device).requires_grad_()
         pair_label = pair_label.to(device)
 
-        out1 = get_features(model, img1)
-        out2 = get_features(model, img2)
+        out1, _ = get_features(model, img1)
+        out2, _  = get_features(model, img2)
 
         cosine_sim = nn.CosineSimilarity(dim=1, eps=1e-6)
         pred = cosine_sim(out1, out2)
@@ -41,7 +41,6 @@ def test(test_dl, model, args):
         loop.set_description(f'Testing')
         loop.set_postfix()
         
-    print(out2.shape)
     loop.close()
     calculate_scores(preds, labels)
     #best_acc, best_th = cal_accuracy(preds, labels)
@@ -69,7 +68,7 @@ def main(args):
         args.vocab_size = test_ds.n_words
         
     print("loading models ...")
-    model, net = prepare_models(args)
+    model = prepare_model(args)
   
     #pprint.pprint(args)
     print("start testing ...")
