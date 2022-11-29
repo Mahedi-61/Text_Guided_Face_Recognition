@@ -3,7 +3,7 @@ import torch.nn as nn
 import numpy as np
 import torch.nn.functional as F
 from models.attention import func_attention
-
+from torch.nn.parameter import Parameter
 
 # ################## Loss for matching text-image ###################
 def cosine_similarity(x1, x2, dim=1, eps=1e-8):
@@ -161,46 +161,101 @@ def cross_entropy(preds, targets, reduction='none'):
         return loss.mean()
 
 
-def word_level_correlation(img_features, words_emb, cap_lens, batch_size, class_ids, labels, args):
-    masks = []
-    att_maps = []
-    result = 0
-    cap_lens = cap_lens.data.tolist()
-    similar_list = []
-    for i in range(batch_size):
-        if class_ids is not None:
-            mask = (class_ids == class_ids[i]).astype(np.uint8)
-            mask[i] = 0
-            masks.append(mask.reshape((1, -1)))
 
-        words_num = cap_lens[i]
 
-        word = words_emb[i, :, :words_num].unsqueeze(0).contiguous()
-        context = img_features[i, :, :, :].unsqueeze(0).contiguous()
-       
-        weiContext, attn = func_attention(word, context, args.TRAIN.SMOOTH.GAMMA1)
-       
-        aver = torch.mean(word,2)
-        averT = aver.unsqueeze(1)
-        res_word = torch.bmm(averT, word)
-        res_softmax = F.softmax(res_word, 2)
-        res_softmax = res_softmax.repeat(1, weiContext.size(1), 1)
-        self_weiContext = weiContext * res_softmax
+class CMPLoss(nn.Module):
+    def __init__(self, is_CMPM, is_CMPC, num_classes, feature_dim=256):
+        super(CMPLoss, self).__init__()
+        self.CMPM = is_CMPM
+        self.CMPC = is_CMPC
+        self.epsilon = 1e-8
+        self.num_classes = num_classes
 
-        word = word.transpose(1, 2).contiguous()
-        self_weiContext = self_weiContext.transpose(1, 2).contiguous()
-        word = word.view(words_num, -1)
-        self_weiContext = self_weiContext.view(words_num, -1)
+        self.W = Parameter(torch.randn(feature_dim, num_classes))
+        self.init_weight()
+
+    def init_weight(self):
+        nn.init.xavier_uniform_(self.W.data, gain=1)
         
-        row_sim = cosine_similarity(word, self_weiContext)
-        row_sim = row_sim.view(1, words_num)
 
-        row_sim.mul_(args.TRAIN.SMOOTH.GAMMA2).exp_()
-        row_sim = row_sim.sum(dim=1, keepdim=True)
-        row_sim = torch.log(row_sim)
-        similar_list.append(F.sigmoid(row_sim[0,0]))
+    def compute_cmpc_loss(self, text_embeddings, image_embeddings, labels):
+        """
+        Cross-Modal Projection Classfication loss(CMPC)
+        :param image_embeddings: Tensor with dtype torch.float32
+        :param text_embeddings: Tensor with dtype torch.float32
+        :param labels: Tensor with dtype torch.int32
+        :return:
+        """
+        criterion = nn.CrossEntropyLoss(reduction='mean')
+        self.W_norm = self.W / self.W.norm(dim=0)
+        #labels_onehot = one_hot_coding(labels, self.num_classes).float()
+        image_norm = image_embeddings / image_embeddings.norm(dim=1, keepdim=True)
+        text_norm = text_embeddings / text_embeddings.norm(dim=1, keepdim=True)
 
-    similar_list = torch.tensor(similar_list, requires_grad=False).cuda()
-    result = nn.BCELoss()(similar_list, labels)
+        image_proj_text = torch.sum(image_embeddings * text_norm, dim=1, keepdim=True) * text_norm
+        text_proj_image = torch.sum(text_embeddings * image_norm, dim=1, keepdim=True) * image_norm
 
-    return result
+        image_logits = torch.matmul(image_proj_text, self.W_norm)
+        text_logits = torch.matmul(text_proj_image, self.W_norm)
+        
+        #labels_one_hot = one_hot_coding(labels, num_classes)
+        '''
+        ipt_loss = criterion(input=image_logits, target=labels)
+        tpi_loss = criterion(input=text_logits, target=labels)
+        cmpc_loss = ipt_loss + tpi_loss
+        '''
+        cmpc_loss = criterion(image_logits, labels) + criterion(text_logits, labels)
+        return cmpc_loss
+
+
+    def compute_cmpm_loss(self, text_embeddings, image_embeddings, labels):
+        """
+        Cross-Modal Projection Matching Loss(CMPM)
+        :param image_embeddings: Tensor with dtype torch.float32
+        :param text_embeddings: Tensor with dtype torch.float32
+        :param labels: Tensor with dtype torch.int32
+        :return:
+            i2t_loss: cmpm loss for image projected to text
+            t2i_loss: cmpm loss for text projected to image
+            pos_avg_sim: average cosine-similarity for positive pairs
+            neg_avg_sim: averate cosine-similarity for negative pairs
+        """
+
+        batch_size = image_embeddings.shape[0]
+        labels_reshape = torch.reshape(labels, (batch_size, 1))
+        labels_dist = labels_reshape - labels_reshape.t()
+        labels_mask = (labels_dist == 0)
+        
+        image_norm = image_embeddings / image_embeddings.norm(dim=1, keepdim=True)
+        text_norm = text_embeddings / text_embeddings.norm(dim=1, keepdim=True)
+        image_proj_text = torch.matmul(image_embeddings, text_norm.t())
+        text_proj_image = torch.matmul(text_embeddings, image_norm.t())
+
+        # normalize the true matching distribution
+        labels_mask_norm = labels_mask.float() / labels_mask.float().norm(dim=1)
+         
+        i2t_pred = F.softmax(image_proj_text, dim=1)
+        #i2t_loss = i2t_pred * torch.log((i2t_pred + self.epsilon)/ (labels_mask_norm + self.epsilon))
+        i2t_loss = i2t_pred * (F.log_softmax(image_proj_text, dim=1) - torch.log(labels_mask_norm + self.epsilon))
+        
+        t2i_pred = F.softmax(text_proj_image, dim=1)
+        #t2i_loss = t2i_pred * torch.log((t2i_pred + self.epsilon)/ (labels_mask_norm + self.epsilon))
+        t2i_loss = t2i_pred * (F.log_softmax(text_proj_image, dim=1) - torch.log(labels_mask_norm + self.epsilon))
+
+        cmpm_loss = torch.mean(torch.sum(i2t_loss, dim=1)) + torch.mean(torch.sum(t2i_loss, dim=1))        
+        return cmpm_loss
+
+
+    def forward(self, text_embeddings, image_embeddings, labels):
+        cmpc_loss = 0.0
+        cmpm_loss = 0.0
+        
+        if self.CMPC:
+            cmpc_loss = self.compute_cmpc_loss(text_embeddings, image_embeddings, labels)
+
+        if self.CMPM:
+            cmpm_loss = self.compute_cmpm_loss(text_embeddings, image_embeddings, labels)
+
+        
+        loss = cmpc_loss + cmpm_loss
+        return loss, cmpc_loss, cmpm_loss

@@ -4,8 +4,8 @@ from utils.train_dataset import TextImgTrainDataset
 from utils.test_dataset import TextImgTestDataset 
 
 from utils.utils import load_model_weights, load_pretrained_arch_model
-from models.models import RNN_ENCODER, BERTHeading, ResNetFace_ENCODER, BERT_ENCODER, resnet_face18
-from models.fusion_nets import LinearFusion, CrossAttention, SentenceAttention
+from models.models import RNN_ENCODER, BERTHeading, ResNet18_ArcFace_ENCODER, BERT_ENCODER, resnet_face18
+from models.fusion_nets import LinearFusion, WordLevelCFA, SentenceAttention, ConcatAttention
 from utils.dataset_utils import *
 
 
@@ -14,8 +14,8 @@ def prepare_image_encoder(args):
     device = args.device
     
     # image encoder
-    image_encoder = ResNetFace_ENCODER()
-    img_encoder_path = args.damsm_encoder_path.replace('text_encoder', 'image_encoder')
+    image_encoder = ResNet18_ArcFace_ENCODER()
+    img_encoder_path = args.text_encoder_path.replace('text_encoder', 'image_encoder')
     state_dict = torch.load(img_encoder_path, map_location='cpu')
     image_encoder = load_model_weights(image_encoder, state_dict)
     image_encoder.to(device)
@@ -30,33 +30,35 @@ def prepare_text_encoder(args):
     device = args.device
 
     # text encoder
-    print("loading text encoder")
+    print("loading text encoder: ", args.text_encoder_path)
     
     if args.using_BERT == True:
-        text_encoder = BERT_ENCODER(args)
+        text_encoder =  BERT_ENCODER(args)
         text_encoder = torch.nn.DataParallel(text_encoder, device_ids=args.gpu_id).cuda()
-        state_dict = torch.load(args.damsm_encoder_path)
+        state_dict = torch.load(args.text_encoder_path)
         text_encoder.load_state_dict(state_dict['model'])
 
         text_head = BERTHeading(args)
         text_head = torch.nn.DataParallel(text_head, device_ids=args.gpu_id).cuda()
         text_head.load_state_dict(state_dict['head'])
-
+        del state_dict
 
     elif args.using_BERT == False:
         text_encoder = RNN_ENCODER(args, nhidden=args.embedding_dim)
-        state_dict = torch.load(args.damsm_encoder_path, map_location='cpu')
-        text_encoder = load_model_weights(text_encoder, state_dict)
+        state_dict = torch.load(args.text_encoder_path, map_location='cpu')
+        text_encoder = load_model_weights(text_encoder, state_dict["model"])
         text_encoder.cuda()
+        text_head = None 
 
     for p in text_encoder.parameters():
         p.requires_grad = False
 
-    for p in text_head.parameters():
-        p.requires_grad = False 
-
     text_encoder.eval()
-    text_head.eval()
+    if text_head is not None:
+        for p in text_head.parameters():
+            p.requires_grad = False  
+        text_head.eval()
+
     return text_encoder, text_head
 
 
@@ -79,10 +81,13 @@ def prepare_model(args):
 def prepare_fusion_net(args):
     # fusion models
     if args.fusion_type == "linear":
-        net = LinearFusion(final_dim = 512)
+        net = LinearFusion(final_dim = args.fusion_final_dim)
 
     elif args.fusion_type == "cross_attention":
-        net = CrossAttention(channel_dim = 256)
+        net = WordLevelCFA(channel_dim = 256)
+
+    elif args.fusion_type == "concat_attention":
+        net = ConcatAttention()
 
     elif args.fusion_type == "sentence_attention":
         print("fusion type: sentence attention")
@@ -111,14 +116,14 @@ def prepare_train_data(data, text_encoder, text_head):
 
 def prepare_train_data_for_Bert(data, text_encoder, text_head):
     imgs, caps, masks, keys, cls_ids = data
-    words_embs, sent_emb = encode_Bert_tokens(text_encoder, text_head, caps, masks)
-    return imgs, words_embs, sent_emb, keys, cls_ids
+    words_emb, word_vector, sent_emb = encode_Bert_tokens(text_encoder, text_head, caps, masks)
+    return imgs, words_emb, word_vector, sent_emb, keys, cls_ids
 
 
 def get_one_batch_train_data_Bert(dataloader):
     data = next(iter(dataloader))
-    imgs, words_emb, sent_emb, keys, cls_ids = prepare_train_data_for_Bert(data)
-    return imgs, words_emb, sent_emb
+    imgs, words_emb, word_vector, sent_emb, keys, cls_ids = prepare_train_data_for_Bert(data)
+    return imgs, words_emb, word_vector, sent_emb
 
 
 def prepare_test_data(data, text_encoder, text_head):
@@ -141,10 +146,10 @@ def prepare_test_data(data, text_encoder, text_head):
 def prepare_test_data_Bert(data, text_encoder, text_head):
     img1, img2, caption1, caption2, mask1, mask2, pair_label = data
 
-    words_emb1, sent_emb1 = encode_Bert_tokens(text_encoder, text_head, caption1, mask1)
-    words_emb2, sent_emb2  = encode_Bert_tokens(text_encoder, text_head, caption2, mask2)
+    words_emb1, word_vector1, sent_emb1 = encode_Bert_tokens(text_encoder, text_head, caption1, mask1)
+    words_emb2, word_vector2, sent_emb2 = encode_Bert_tokens(text_encoder, text_head, caption2, mask2)
 
-    return img1, img2, words_emb1, words_emb2, sent_emb1, sent_emb2, pair_label 
+    return img1, img2, words_emb1, words_emb2, word_vector1, word_vector2, sent_emb1, sent_emb2, pair_label 
 
 
 
@@ -157,13 +162,11 @@ def prepare_dataloader(args, split, transform):
     else:
         if (split == "train") :
             image_transform = transforms.Compose([
-                #transforms.Resize(144),
                 transforms.RandomCrop(imsize),
                 transforms.RandomHorizontalFlip()])
 
         elif (split == "test"):
             image_transform = transforms.Compose([
-                #transforms.Resize(144),
                 transforms.RandomCrop(imsize)])
 
     if args.using_BERT == True: 
@@ -199,17 +202,18 @@ def prepare_dataloader(args, split, transform):
                                         transform=image_transform, args=args)
 
 
+    del  train_captions, test_captions
     if (split == "train"):
         train_dl = torch.utils.data.DataLoader(
             train_ds, 
-            batch_size=args.train_batch_size, 
+            batch_size=args.batch_size, 
             drop_last=True,
             num_workers=args.num_workers, 
             shuffle=True)
 
         valid_dl = torch.utils.data.DataLoader(
             valid_ds, 
-            batch_size=args.test_batch_size, 
+            batch_size=args.batch_size, 
             drop_last=True,
             num_workers=args.num_workers, 
             shuffle=True)
@@ -220,7 +224,7 @@ def prepare_dataloader(args, split, transform):
     elif (split == "test"):
         test_dl = torch.utils.data.DataLoader(
             test_ds, 
-            batch_size=args.test_batch_size, 
+            batch_size=args.batch_size, 
             num_workers=args.num_workers, 
             shuffle=False)
 

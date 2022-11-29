@@ -1,6 +1,5 @@
 import sys
 import os.path as osp
-from scipy import linalg
 from sklearn import metrics
 import numpy as np
 import torch
@@ -55,14 +54,14 @@ def calculate_scores(y_score, y_true):
 
 def test(test_dl, model, net, text_encoder, text_head, args):
     device = args.device
-    net = net.eval()
+    if net is not None: net.eval()
     preds = []
     labels = []
 
     loop = tqdm(total=len(test_dl))
     for step, data in enumerate(test_dl, 0):
         if args.using_BERT == True: 
-            img1, img2, words_emb1, words_emb2, sent_emb1, sent_emb2, pair_label = prepare_test_data_Bert(data, text_encoder, text_head)
+            img1, img2, words_emb1, words_emb2, word_vector1, word_vector2, sent_emb1, sent_emb2, pair_label = prepare_test_data_Bert(data, text_encoder, text_head)
 
         elif args.using_BERT == False:
             img1, img2, words_emb1, words_emb2, sent_emb1, sent_emb2, pair_label = prepare_test_data(data, text_encoder, text_head)
@@ -76,13 +75,17 @@ def test(test_dl, model, net, text_encoder, text_head, args):
         global_feat1,  local_feat1 = get_features(model, img1)
         global_feat2,  local_feat2 = get_features(model, img2)
 
-
         # sentence & word featurs 
         if args.fusion_type == "concat":
-            out1 =  torch.cat((global_feat1, sent_emb1), dim=1) 
-            out2 =  torch.cat((global_feat2, sent_emb2), dim=1)
+            if args.using_BERT == False:
+                out1 =  torch.cat((global_feat1, sent_emb1), dim=1) 
+                out2 =  torch.cat((global_feat2, sent_emb2), dim=1)
 
-        elif args.fusion_type == "linear" or args.fusion_type == "sentence_attention":
+            elif  args.using_BERT == True:
+                out1 =  torch.cat((global_feat1, word_vector1, sent_emb1), dim=1) 
+                out2 =  torch.cat((global_feat2, word_vector2, sent_emb2), dim=1)
+
+        elif args.fusion_type == "linear" or args.fusion_type == "sentence_attention" or args.fusion_type == "concat_attention":
             out1 =  net(global_feat1, sent_emb1)
             out2 =  net(global_feat2, sent_emb2)
 

@@ -2,7 +2,6 @@ import torch.utils.data as data
 import os
 import numpy as np
 import numpy.random as random
-
 from utils.dataset_utils import *
 
 ################################################################
@@ -13,7 +12,7 @@ class TextImgTrainDataset(data.Dataset):
     def __init__(self, filenames, captions, att_masks, ixtoword=None, wordtoix=None, 
                     n_words=None, transform=None, split="train", args=None):
 
-        print("############## Loading %s dataset ################" % split)
+        print("\n############## Loading %s dataset ################" % split)
         self.transform = transform
         self.embeddings_num = args.captions_per_image
         self.data_dir = args.data_dir
@@ -88,16 +87,16 @@ class TextImgTrainDataset(data.Dataset):
             data_dir = os.path.join(self.data_dir, "CUB_200_2011")
             img_extension = ".jpg"
 
-        elif self.dataset_name == "celeba":
+        elif self.config == "Fusion":
             data_dir = os.path.join(self.data_dir, "celeba")
             img_extension = ".png"
+            img_folder = "train_images"
 
-        if self.config == "DAMSM":
+        if self.config == "Pretrain":
+            data_dir = os.path.join(self.data_dir, "celeba")
             if self.split == "train": img_folder = "train_images_DAMSM"
             elif self.split == "test": img_folder = "test_images_DAMSM"
-
-        else:
-            img_folder = "train_images"
+            img_extension = ".png"
 
         img_name = "%s/%s/%s%s" % (data_dir, img_folder, key, img_extension)
         imgs = get_imgs(img_name, self.config, bbox, self.transform)

@@ -1,10 +1,10 @@
 #### configuration and directory
-CONFIG_NAME: DAMSM
+CONFIG_NAME: Pretrain
 dataset_name: celeba
 data_dir: ./data/celeba
 checkpoints_path: ./checkpoints
 test_pair_list: ./data/celeba/celeba/celeba_test_10_pair.txt  
-resume_model_path: ./checkpoints/celeba/DAMSM/Bert/arc_text_encoder1.pth
+resume_model_path: ./checkpoints/celeba/Pretrain/Bert/arcface_text_encoder_bert_second_10.pth
 resume_epoch: 1
 
 # machine setup
@@ -13,30 +13,37 @@ gpu_id: [0, 1]
 manual_seed: 100
 CUDA: True
 
+is_DAMSM: True 
+is_CLIP: False  
+is_CMP: False    
+
+lambda_cl: 2.0
+
+
 # model arch 
 img_size: 128  #299 for Inception
-lr_text_bert:  0.00001  #(1e-5) because 5e-4 good but slow convergence; 1e-3 too fast
-lr_text: 0.0001
-lr_image : 0.0001 #(1e-4)
-lr_head: 0.001
-weight_decay: 0.001 #(1e-3)
+lr_text_bert:  0.0001  #(1e-4) initial learnig rate 
+lr_text: 0.0003
+lr_image: 0.0001
+#lr_image : 0.0001 #(1e-4)
+lr_head: 0.003
+weight_decay: 0.01 #(1e-3)
 clip_max_norm: 1.0
 
+
 #trainng settings
-test_batch_size: 32
-train_batch_size: 32 
-max_epoch: 10
+batch_size: 16 #16 for first step 
+max_epoch: 8
 test_interval: 1
 save_interval: 1
-patience: 1
+patience: 1 # 1 for BERT
 factor: 0.8
 temperature: 1.0
-trainable: True 
-
 
 # flags
-do_test: True  
+do_test: False   
 prev_weight: False
+is_second_step: False  
 
 # encoder
 TRAIN:

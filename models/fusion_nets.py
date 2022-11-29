@@ -437,9 +437,9 @@ class SelfAttention(nn.Module):
         return response
         
 
-class CrossAttention(nn.Module):
+class WordLevelCFA(nn.Module):
     def __init__(self, channel_dim = 256, scale=4):
-        super(CrossAttention,self).__init__()
+        super(WordLevelCFA,self).__init__()
         self.channel_dim = channel_dim
         self.bn = nn.BatchNorm2d(256)
         self.sa = SelfAttention(channel_dim, scale)
@@ -503,19 +503,34 @@ class SentenceAttention(nn.Module):
     def __init__(self):
         super(SentenceAttention, self).__init__()
 
-        self.mha = MultiHeadAttention()
+        self.mha = torch.nn.MultiheadAttention(embed_dim = 256, num_heads = 1, dropout=0.1, batch_first=True)
         #self.linear = nn.Linear(1024, 512)
 
     def forward(self, img: Tensor, sent: Tensor) -> Tensor:
         bs = img.size(0)
-        img = img.contiguous().view(bs, 16, 32)
-        sent = sent.contiguous().view(bs, 8, 32)
+        img = img.contiguous().view(bs, 2, 256)
+        sent = sent.contiguous().view(bs, 1, 256)
 
         gs = self.mha(sent, img, img)
-        gs = gs.view(bs, -1) #batch_size x 1024
+        gs = gs[0].contiguous().view(bs, -1) #batch_size x 1024
         #iw = self.linear(iw)
         return gs 
-        
+
+
+class ConcatAttention(nn.Module):
+    def __init__(self):
+        super(ConcatAttention, self).__init__()
+        self.mha = torch.nn.MultiheadAttention(embed_dim = 256, num_heads = 1, dropout=0.5, batch_first=True)
+
+    def forward(self, img: Tensor, sent: Tensor) -> Tensor:
+        bs = img.size(0) 
+        patch = torch.cat((img, sent), dim = 1)
+        patch = patch.contiguous().view(bs, 3, 256)
+        patch = self.mha(patch, patch, patch)
+        patch = patch[0].contiguous().view(bs, -1) 
+        return patch 
+
+
 
 if __name__ == "__main__":
     #ca = CrossAttention()

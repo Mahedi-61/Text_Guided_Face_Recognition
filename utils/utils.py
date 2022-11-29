@@ -3,13 +3,10 @@ import errno
 from tabnanny import check
 import numpy as np
 import torch
-import pickle
 import yaml
 from easydict import EasyDict as edict
-import pprint
 import datetime
 import dateutil.tz
-from PIL import Image
 
 
 def params_count(model):
@@ -80,7 +77,7 @@ def save_models(net, metric_fc, optG, epoch, args):
                             args.CONFIG_NAME)
     mkdir_p(save_dir)
 
-    name = '%s/state_epoch_%s_%s_%03d.pth' % (args.model_save_file, args.en_type, args.fusion_type, epoch)
+    name = '%s_%s_epoch_%03d.pth' % (args.en_type, args.fusion_type, epoch)
     state_path = os.path.join(save_dir, name)
     state = {'model': {'net': net.state_dict(), 'metric_fc': metric_fc.state_dict()},
             'optimizer': {'optimizer': optG.state_dict()}}

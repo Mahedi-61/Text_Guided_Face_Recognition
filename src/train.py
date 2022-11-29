@@ -20,7 +20,7 @@ from models import metrics, focal_loss
 
 def parse_args():
     # Training settings
-    parser = argparse.ArgumentParser(description='Text2Img')
+    parser = argparse.ArgumentParser(description='CGFG')
     parser.add_argument('--cfg', dest='cfg_file', type=str, 
                         default='./cfg/celeba.yml',
                         help='optional config file')
@@ -57,11 +57,15 @@ def get_margin(args):
 
 
 def get_optimizer(args, net, metric_fc):
+    params = [{"params": net.parameters(), "lr": 0.001}, 
+             {"params": metric_fc.parameters(), 
+              "lr" : args.lr_image_train, 
+              "weight_decay" : args.weight_decay}
+            ]
+
     if args.optimizer == 'sgd':
-        optimizer = torch.optim.SGD([{'params': net.parameters()}, 
-                                     {'params': metric_fc.parameters()}],
-                                     lr=args.lr_image_train, 
-                                     weight_decay=args.weight_decay)
+        optimizer = torch.optim.SGD(params)
+
     elif args.optimizer == 'adam':
         optimizer = torch.optim.Adam([{'params': net.parameters()}, 
                                       {'params': metric_fc.parameters()}],
@@ -69,7 +73,7 @@ def get_optimizer(args, net, metric_fc):
                                       weight_decay=args.weight_decay)
     return optimizer
 
-    
+
 
 def train(train_dl, model, net, metric_fc, text_encoder, text_head, criterion, optimizer, scheduler, args):
     device = args.device
@@ -79,7 +83,7 @@ def train(train_dl, model, net, metric_fc, text_encoder, text_head, criterion, o
     loop = tqdm(total=len(train_dl))
     for step, data in enumerate(train_dl, 0):
         if args.using_BERT == True:
-            imgs, words_emb, sent_emb, keys, label = \
+            imgs, words_emb, word_vector, sent_emb, keys, label = \
                     prepare_train_data_for_Bert(data, text_encoder, text_head)
             cap_lens = None 
 
@@ -94,7 +98,7 @@ def train(train_dl, model, net, metric_fc, text_encoder, text_head, criterion, o
         
         global_feats, local_feats = get_features(model, imgs)
         
-        if args.fusion_type == "linear" or args.fusion_type == "sentence_attention":
+        if args.fusion_type == "linear" or args.fusion_type == "sentence_attention" or args.fusion_type == "concat_attention":
             output = net(global_feats, sent_emb)
 
         elif args.fusion_type == "cross_attention":
@@ -123,8 +127,6 @@ def train(train_dl, model, net, metric_fc, text_encoder, text_head, criterion, o
 
 def main(args):
     # prepare dataloader, models, data
-    args.model_save_file = osp.join(args.checkpoints_path, str(args.dataset_name))
-    mkdir_p(args.model_save_file)
     p_loss = ""
 
     train_dl, train_ds, valid_dl, valid_ds = prepare_dataloader(args, split="train", transform=None)
@@ -161,7 +163,6 @@ def main(args):
         args.current_epoch = epoch 
         p_loss += train(train_dl, model, net, metric_fc, text_encoder, text_head, criterion, optimizer, scheduler, args)
     
-        
         # save
         if epoch % args.save_interval==0:
             save_models(net, metric_fc, optimizer, epoch, args)

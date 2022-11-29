@@ -31,7 +31,7 @@ def encode_tokens(text_encoder, text_head, caption, cap_lens):
             hidden = text_encoder.init_hidden(caption.size(0))
 
         words_embs, sent_emb = text_encoder(caption, cap_lens, hidden)
-        words_embs, sent_emb = text_head(words_embs, sent_emb)
+        #words_embs, sent_emb = text_head(words_embs, sent_emb)
     return words_embs.detach(), sent_emb.detach()
 
 
@@ -42,10 +42,9 @@ def encode_Bert_tokens(text_encoder, text_head, caption, mask):
 
     with torch.no_grad():
          words_emb, sent_emb = text_encoder(caption, mask)
-         words_emb, sent_emb = text_head(words_emb, sent_emb)
+         words_emb, word_vector, sent_emb = text_head(words_emb, sent_emb)
 
-    return words_emb.detach(), sent_emb.detach()
-
+    return words_emb.detach(), word_vector.detach(), sent_emb.detach()
 
 
 def rm_sort(caption, sorted_cap_idxs):
@@ -127,10 +126,11 @@ def load_captions_Bert(data_dir, filenames, args):
             for cap in captions:
                 if len(cap) == 0: continue
                 cap = cap.replace("\ufffd\ufffd", " ")
+                
                 encoding = tokenizer.encode_plus(
                             cap,
                             add_special_tokens=True,
-                            max_length = 24,
+                            max_length = args.bert_words_num,
                             return_token_type_ids=False,
                             padding='max_length',
                             truncation=True,
@@ -149,6 +149,8 @@ def load_captions_Bert(data_dir, filenames, args):
 
             if cnt < args.captions_per_image:
                 print('ERROR: the captions for %s less than %d' % (filenames[i], cnt))
+
+    del captions 
     return all_captions, all_attention_mask
 
 
@@ -185,12 +187,14 @@ def load_captions(data_dir, filenames, embeddings_num):
 
             if cnt < embeddings_num:
                 print('ERROR: the captions for %s less than %d' % (filenames[i], cnt))
+
+    del captions 
     return all_captions
 
 
 
 def load_text_data_Bert(data_dir, args):
-    filepath = os.path.join(data_dir, 'captions_DAMSM_BERT.pickle')
+    filepath = os.path.join(data_dir, 'captions_BERT.pickle')
 
     if not os.path.isfile(filepath):
         train_names = load_filenames(data_dir, 'train')
@@ -204,7 +208,7 @@ def load_text_data_Bert(data_dir, args):
                             f, protocol=2)
             print('\nSave to: ', filepath)
     else:
-        print("Loading captions_DAMSM_BERT.pickle")
+        print("Loading captions_BERT.pickle")
         with open(filepath, 'rb') as f:
             gc.disable()
             x = pickle.load(f)
@@ -221,7 +225,7 @@ def load_text_data_Bert(data_dir, args):
 
 
 def load_text_data(data_dir, embeddings_num):
-    filepath = os.path.join(data_dir, 'captions_DAMSM.pickle')
+    filepath = os.path.join(data_dir, 'captions_RNN.pickle')
 
     if not os.path.isfile(filepath):
         train_names = load_filenames(data_dir, 'train')
@@ -313,5 +317,5 @@ def load_class_id(data_dir):
             class_id = pickle.load(f, encoding="bytes")
             gc.enable()
 
-    print('Load %s class_info from: %s (%d)' % (data_dir, filepath, len(class_id)))
+    print('Load class_info from: %s (%d)' % (filepath, len(class_id)))
     return class_id

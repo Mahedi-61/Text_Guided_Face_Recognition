@@ -3,7 +3,6 @@ import os.path as osp
 import random
 import argparse
 import numpy as np
-import pprint
 import torch
 
 
@@ -16,7 +15,7 @@ from utils.modules import test
 
 def parse_args():
     # Training settings
-    parser = argparse.ArgumentParser(description='Text2Img')
+    parser = argparse.ArgumentParser(description='CGFG')
     parser.add_argument('--cfg', dest='cfg_file', type=str, default='./cfg/celeba.yml',
                         help='optional config file')
     parser.add_argument('--train', type=bool, default=False, help='if train model')
@@ -30,21 +29,24 @@ def main(args):
     if args.using_BERT == False:
         args.vocab_size = test_ds.n_words
 
-    text_encoder, text_head = prepare_text_encoder(args)
-    model = prepare_model(args)
-    
-    if args.fusion_type == "concat":
-        net = None
+    for i in [1, 2, 7]:
+        args.text_encoder_path = "./weights/celeba/Pretrain/Bert/arcface_text_encoder_bert_first_%d.pth" % i
+        text_encoder, text_head = prepare_text_encoder(args)
+        model = prepare_model(args)
+        
+        if args.fusion_type == "concat":
+            net = None
 
-    else:
-        net = prepare_fusion_net(args)
-        # load from checkpoint
-        print("loading checkpoint; epoch: ", args.resume_epoch)
-        net = load_fusion_net(net, args.resume_model_path)
+        else:
+            net = prepare_fusion_net(args)
+            # load from checkpoint
+            print("loading checkpoint; epoch: ", args.resume_epoch)
+            net = load_fusion_net(net, args.resume_model_path)
 
-    #pprint.pprint(args)
-    print("Start Testing")
-    test(test_dl, model, net, text_encoder, text_head, args)
+        #pprint.pprint(args)
+        print("Start Testing")
+        test(test_dl, model, net, text_encoder, text_head, args)
+
 
 
 if __name__ == "__main__":
