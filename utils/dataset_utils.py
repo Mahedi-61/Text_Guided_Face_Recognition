@@ -41,10 +41,10 @@ def encode_Bert_tokens(text_encoder, text_head, caption, mask):
     mask = Variable(mask).cuda()
 
     with torch.no_grad():
-         words_emb, sent_emb = text_encoder(caption, mask)
-         words_emb, word_vector, sent_emb = text_head(words_emb, sent_emb)
+         words_emb, sent_emb_org = text_encoder(caption, mask)
+         words_emb, word_vector, sent_emb = text_head(words_emb, sent_emb_org)
 
-    return words_emb.detach(), word_vector.detach(), sent_emb.detach()
+    return words_emb.detach(), word_vector.detach(), sent_emb.detach(), sent_emb_org.detach() 
 
 
 def rm_sort(caption, sorted_cap_idxs):

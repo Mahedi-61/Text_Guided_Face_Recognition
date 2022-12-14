@@ -5,6 +5,7 @@ import torch.nn.functional as F
 from models.attention import func_attention
 from torch.nn.parameter import Parameter
 
+
 # ################## Loss for matching text-image ###################
 def cosine_similarity(x1, x2, dim=1, eps=1e-8):
     #Returns cosine similarity between x1 and x2, computed along dim.
@@ -164,7 +165,7 @@ def cross_entropy(preds, targets, reduction='none'):
 
 
 class CMPLoss(nn.Module):
-    def __init__(self, is_CMPM, is_CMPC, num_classes, feature_dim=256):
+    def __init__(self, is_CMPM, is_CMPC, num_classes, feature_dim):
         super(CMPLoss, self).__init__()
         self.CMPM = is_CMPM
         self.CMPC = is_CMPC

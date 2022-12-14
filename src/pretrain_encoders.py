@@ -36,6 +36,7 @@ def parse_args():
     return args
 
 
+
 def save_encoders(text_encoder, text_head, image_encoder, image_head, 
                             optimizer, optimizer_head, args):
 
@@ -52,10 +53,8 @@ def save_encoders(text_encoder, text_head, image_encoder, image_head,
         "head": image_head.state_dict()
     }
 
-    if  args.is_second_step == False:
-        step = "first"
-    else:
-        step = "second"
+
+    step = "first"
     torch.save(checkpoint_image_en, '%s/arcface_image_encoder_%s_%s_%d.pth' % 
                                     (save_dir, args.en_type, step, args.current_epoch))
 
@@ -152,8 +151,7 @@ def train(dataloader,  text_encoder, text_head, image_encoder, image_head, optim
 
         # update
         total_loss.backward()
-        if args.is_second_step == False: 
-            optimizer.step()
+        optimizer.step()
         optimizer_head.step()
         lr_scheduler.step()
 
@@ -183,6 +181,9 @@ def train(dataloader,  text_encoder, text_head, image_encoder, image_head, optim
 
     if args.is_CMP == True: 
         print("Total cmp loss: {:5.4f} ".format(total_cmp_loss.detach().cpu().numpy() / total_length))
+
+
+    return total_damsm_loss + total_cl_loss + total_cmp_loss
 
 
 
@@ -399,7 +400,7 @@ def main(args):
    
     if args.is_CMP == True: 
         # initialize losses
-        cmp_loss = CMPLoss(is_CMPM=False, is_CMPC=True, num_classes=24000)
+        cmp_loss = CMPLoss(is_CMPM=True, is_CMPC=True, num_classes=24000, feature_dim=args.aux_feat_dim_per_granularity)
         cmp_loss.cuda()
     else:
         cmp_loss = 0
@@ -409,16 +410,14 @@ def main(args):
 
         print('Reset scheduler')
         lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=2000, eta_min=1e-5)
-        train(train_dl, text_encoder, text_head, image_encoder, image_head, optimizer, lr_scheduler,
+        total_loss = train(train_dl, text_encoder, text_head, image_encoder, image_head, optimizer, lr_scheduler,
                 optimizer_head, cmp_loss, args)
 
-
+        lr_scheduler_head.step(total_loss)
         if ((args.do_test == True) and (epoch % args.test_interval == 0)):
             print("Let's evaluate the model")
 
             s_loss, w_loss, total_clip_loss = evaluate(valid_dl, text_encoder, text_head, image_encoder, image_head, args)
-            total_loss = s_loss + w_loss + total_clip_loss 
-            lr_scheduler_head.step(total_loss)
             print('| end epoch {:3d} | valid loss {:5.4f} {:5.4f} {:5.4f}'.format(epoch, s_loss, w_loss, total_clip_loss))
 
         if (epoch % args.save_interval == 0 or epoch == args.max_epoch):

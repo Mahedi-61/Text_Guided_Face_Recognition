@@ -23,30 +23,28 @@ def parse_args():
     return args
 
 
+
 def main(args):
     test_dl, test_ds = prepare_dataloader(args, split="test", transform=None)
 
     if args.using_BERT == False:
         args.vocab_size = test_ds.n_words
 
-    for i in [1, 2, 7]:
-        args.text_encoder_path = "./weights/celeba/Pretrain/Bert/arcface_text_encoder_bert_first_%d.pth" % i
-        text_encoder, text_head = prepare_text_encoder(args)
+    for i in range(2, 7):
+        args.text_encoder_path = "./checkpoints/celeba/Fusion/arcface_text_encoder_bert_linear_%d.pth" % i
+        text_encoder, text_head = prepare_text_encoder(args, test=True)
         model = prepare_model(args)
         
-        if args.fusion_type == "concat":
-            net = None
-
-        else:
-            net = prepare_fusion_net(args)
-            # load from checkpoint
-            print("loading checkpoint; epoch: ", args.resume_epoch)
-            net = load_fusion_net(net, args.resume_model_path)
+        # load from checkpoint
+        net = prepare_fusion_net(args)
+        print("loading checkpoint; epoch: ", i)
+        load_path = "./checkpoints/celeba/Fusion/bert_linear_epoch_%d.pth" % i
+        net = load_fusion_net(net, load_path) 
 
         #pprint.pprint(args)
         print("Start Testing")
+        args.is_roc = True   
         test(test_dl, model, net, text_encoder, text_head, args)
-
 
 
 if __name__ == "__main__":

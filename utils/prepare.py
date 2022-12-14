@@ -5,7 +5,7 @@ from utils.test_dataset import TextImgTestDataset
 
 from utils.utils import load_model_weights, load_pretrained_arch_model
 from models.models import RNN_ENCODER, BERTHeading, ResNet18_ArcFace_ENCODER, BERT_ENCODER, resnet_face18
-from models.fusion_nets import LinearFusion, WordLevelCFA, SentenceAttention, ConcatAttention
+from models.fusion_nets import ConcatFusion, LinearFusion, WordLevelCFA, ParagraphLevelCFA, ConcatAttention
 from utils.dataset_utils import *
 
 
@@ -26,10 +26,12 @@ def prepare_image_encoder(args):
     return image_encoder
 
 
-def prepare_text_encoder(args):
-    device = args.device
-
-    # text encoder
+def prepare_text_encoder(args, test):
+    """
+    text_encoder is already finetuned. so set requires_grad = False
+    text_head need to train.
+    In case test = True; set requires_grad = False for both model  
+    """
     print("loading text encoder: ", args.text_encoder_path)
     
     if args.using_BERT == True:
@@ -43,6 +45,7 @@ def prepare_text_encoder(args):
         text_head.load_state_dict(state_dict['head'])
         del state_dict
 
+
     elif args.using_BERT == False:
         text_encoder = RNN_ENCODER(args, nhidden=args.embedding_dim)
         state_dict = torch.load(args.text_encoder_path, map_location='cpu')
@@ -50,14 +53,13 @@ def prepare_text_encoder(args):
         text_encoder.cuda()
         text_head = None 
 
-    for p in text_encoder.parameters():
-        p.requires_grad = False
+    if test == True:
+        for p in text_encoder.parameters():
+            p.requires_grad = False
 
-    text_encoder.eval()
-    if text_head is not None:
-        for p in text_head.parameters():
-            p.requires_grad = False  
-        text_head.eval()
+        if text_head is not None:
+            for p in text_head.parameters():
+                p.requires_grad = False  
 
     return text_encoder, text_head
 
@@ -80,30 +82,33 @@ def prepare_model(args):
 
 def prepare_fusion_net(args):
     # fusion models
+    if args.fusion_type == "concat":
+        net = ConcatFusion()
+
     if args.fusion_type == "linear":
         net = LinearFusion(final_dim = args.fusion_final_dim)
 
     elif args.fusion_type == "cross_attention":
-        net = WordLevelCFA(channel_dim = 256)
+        net = WordLevelCFA(channel_dim = args.aux_feat_dim_per_granularity)
 
     elif args.fusion_type == "concat_attention":
         net = ConcatAttention()
 
-    elif args.fusion_type == "sentence_attention":
-        print("fusion type: sentence attention")
-        net = SentenceAttention()
+    elif args.fusion_type == "paragraph_attention":
+        print("fusion type: paragraph_attention")
+        net = ParagraphLevelCFA()
 
     net = torch.nn.DataParallel(net, device_ids=args.gpu_id).to(args.device)
     return net
 
 
-
 ################ data ##############
+"""
 def get_one_batch_train_data(dataloader, text_encoder, text_head):
     data = next(iter(dataloader))
     imgs, words_embs, sent_emb, keys, label = prepare_train_data(data, text_encoder, text_head)
     return imgs, words_embs, sent_emb
-
+"""
 
 def prepare_train_data(data, text_encoder, text_head):
     imgs, captions, caption_lens, keys, label = data
@@ -116,15 +121,15 @@ def prepare_train_data(data, text_encoder, text_head):
 
 def prepare_train_data_for_Bert(data, text_encoder, text_head):
     imgs, caps, masks, keys, cls_ids = data
-    words_emb, word_vector, sent_emb = encode_Bert_tokens(text_encoder, text_head, caps, masks)
-    return imgs, words_emb, word_vector, sent_emb, keys, cls_ids
+    words_emb, word_vector, sent_emb, sent_emb_org = encode_Bert_tokens(text_encoder, text_head, caps, masks)
+    return imgs, words_emb, word_vector, sent_emb, sent_emb_org, keys, cls_ids
 
-
+"""
 def get_one_batch_train_data_Bert(dataloader):
     data = next(iter(dataloader))
     imgs, words_emb, word_vector, sent_emb, keys, cls_ids = prepare_train_data_for_Bert(data)
     return imgs, words_emb, word_vector, sent_emb
-
+"""
 
 def prepare_test_data(data, text_encoder, text_head):
     img1, img2, cap1, cap2, cap_len1, cap_len2, pair_label = data
@@ -146,10 +151,11 @@ def prepare_test_data(data, text_encoder, text_head):
 def prepare_test_data_Bert(data, text_encoder, text_head):
     img1, img2, caption1, caption2, mask1, mask2, pair_label = data
 
-    words_emb1, word_vector1, sent_emb1 = encode_Bert_tokens(text_encoder, text_head, caption1, mask1)
-    words_emb2, word_vector2, sent_emb2 = encode_Bert_tokens(text_encoder, text_head, caption2, mask2)
+    words_emb1, word_vector1, sent_emb1, sent_emb_org1 = encode_Bert_tokens(text_encoder, text_head, caption1, mask1)
+    words_emb2, word_vector2, sent_emb2, sent_emb_org2 = encode_Bert_tokens(text_encoder, text_head, caption2, mask2)
 
-    return img1, img2, words_emb1, words_emb2, word_vector1, word_vector2, sent_emb1, sent_emb2, pair_label 
+    return (img1, img2, words_emb1, words_emb2, word_vector1, word_vector2, 
+            sent_emb1, sent_emb2, sent_emb_org1, sent_emb_org2, pair_label) 
 
 
 

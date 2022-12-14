@@ -4,7 +4,7 @@ dataset_name: celeba
 data_dir: ./data/celeba
 checkpoints_path: ./checkpoints
 test_pair_list: ./data/celeba/celeba/celeba_test_10_pair.txt  
-resume_model_path: ./checkpoints/celeba/Pretrain/Bert/arcface_text_encoder_bert_second_10.pth
+resume_model_path: ./checkpoints/celeba/Pretrain/Bert/arcface_text_encoder_bert_first_.pth
 resume_epoch: 1
 
 # machine setup
@@ -13,12 +13,12 @@ gpu_id: [0, 1]
 manual_seed: 100
 CUDA: True
 
-is_DAMSM: True 
+is_DAMSM: True  
 is_CLIP: False  
-is_CMP: False    
+is_CMP: False      
 
 lambda_cl: 2.0
-
+aux_feat_dim_per_granularity: 64
 
 # model arch 
 img_size: 128  #299 for Inception
@@ -42,8 +42,7 @@ temperature: 1.0
 
 # flags
 do_test: False   
-prev_weight: False
-is_second_step: False  
+prev_weight: False 
 
 # encoder
 TRAIN:

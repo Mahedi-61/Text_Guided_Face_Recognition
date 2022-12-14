@@ -98,65 +98,6 @@ class AdditiveAttention(nn.Module):
         return context, attn
 
 
-class LocationAwareAttention(nn.Module):
-    """
-    Applies a location-aware attention mechanism on the output features from the decoder.
-    Location-aware attention proposed in "Attention-Based Models for Speech Recognition" paper.
-    The location-aware attention mechanism is performing well in speech recognition tasks.
-    We refer to implementation of ClovaCall Attention style.
-
-    Args:
-        hidden_dim (int): dimesion of hidden state vector
-        smoothing (bool): flag indication whether to use smoothing or not.
-
-    Inputs: query, value, last_attn, smoothing
-        - **query** (batch, q_len, hidden_dim): tensor containing the output features from the decoder.
-        - **value** (batch, v_len, hidden_dim): tensor containing features of the encoded input sequence.
-        - **last_attn** (batch_size * num_heads, v_len): tensor containing previous timestep`s attention (alignment)
-
-    Returns: output, attn
-        - **output** (batch, output_len, dimensions): tensor containing the feature from encoder outputs
-        - **attn** (batch * num_heads, v_len): tensor containing the attention (alignment) from the encoder outputs.
-
-    Reference:
-        - **Attention-Based Models for Speech Recognition**: https://arxiv.org/abs/1506.07503
-        - **ClovaCall**: https://github.com/clovaai/ClovaCall/blob/master/las.pytorch/models/attention.py
-    """
-    def __init__(self, hidden_dim: int, smoothing: bool = True) -> None:
-        super(LocationAwareAttention, self).__init__()
-        self.hidden_dim = hidden_dim
-        self.conv1d = nn.Conv1d(in_channels=1, out_channels=hidden_dim, kernel_size=3, padding=1)
-        self.query_proj = nn.Linear(hidden_dim, hidden_dim, bias=False)
-        self.value_proj = nn.Linear(hidden_dim, hidden_dim, bias=False)
-        self.score_proj = nn.Linear(hidden_dim, 1, bias=True)
-        self.bias = nn.Parameter(torch.rand(hidden_dim).uniform_(-0.1, 0.1))
-        self.smoothing = smoothing
-
-    def forward(self, query: Tensor, value: Tensor, last_attn: Tensor) -> Tuple[Tensor, Tensor]:
-        batch_size, hidden_dim, seq_len = query.size(0), query.size(2), value.size(1)
-
-        # Initialize previous attention (alignment) to zeros
-        if last_attn is None:
-            last_attn = value.new_zeros(batch_size, seq_len)
-
-        conv_attn = torch.transpose(self.conv1d(last_attn.unsqueeze(1)), 1, 2)
-        score = self.score_proj(torch.tanh(
-                self.query_proj(query.reshape(-1, hidden_dim)).view(batch_size, -1, hidden_dim)
-                + self.value_proj(value.reshape(-1, hidden_dim)).view(batch_size, -1, hidden_dim)
-                + conv_attn
-                + self.bias
-        )).squeeze(dim=-1)
-
-        if self.smoothing:
-            score = torch.sigmoid(score)
-            attn = torch.div(score, score.sum(dim=-1).unsqueeze(dim=-1))
-        else:
-            attn = F.softmax(score, dim=-1)
-
-        context = torch.bmm(attn.unsqueeze(dim=1), value).squeeze(dim=1)  # Bx1xT X BxTxD => Bx1xD => BxD
-
-        return context, attn
-
 
 class MultiHeadLocationAwareAttention(nn.Module):
     """
@@ -387,15 +328,25 @@ class CustomizingAttention(nn.Module):
 
 
 ############### Fusion ###################
+class ConcatFusion(nn.Module):
+    def __init__(self,):
+        super(ConcatFusion, self).__init__()
+
+    def forward(self, img_features, text_embedding):
+        out = torch.cat((img_features, text_embedding), dim=1)
+        return out 
+
+
 class LinearFusion(nn.Module):
     def __init__(self, final_dim):
         super(LinearFusion, self).__init__()
-        self.fc1 = nn.Linear(768, final_dim)
+        self.fc1 = nn.Linear(576, final_dim) # change 512, 576, 640, 704, 768
+        self.relu = nn.ReLU()
 
-    def forward(self, img_features, cond):
-        concat_features = torch.cat((img_features, cond), dim=1)
+    def forward(self, img_features, word_vector):
+        concat_features =  torch.cat((img_features, word_vector), dim=1) #sent_emb1, word_vector1
         out = self.fc1(concat_features)
-        return out 
+        return self.relu(out)  
 
 
 class SelfAttention(nn.Module):
@@ -437,26 +388,6 @@ class SelfAttention(nn.Module):
         return response
         
 
-class WordLevelCFA(nn.Module):
-    def __init__(self, channel_dim = 256, scale=4):
-        super(WordLevelCFA,self).__init__()
-        self.channel_dim = channel_dim
-        self.bn = nn.BatchNorm2d(256)
-        self.sa = SelfAttention(channel_dim, scale)
-        self.avg_pool = nn.AvgPool2d(kernel_size = 8)
-        #self.linear = nn.Linear(1024, 512)
-
-    def forward(self, img: Tensor, word: Tensor) -> Tensor:
-        img = self.bn(img)
-        word = torch.bmm(word, word.transpose(1, 2)) / np.sqrt(self.channel_dim) #batch x 256 x 256
-        word = word.unsqueeze(-1).view(word.size(0), word.size(1), 16, 16)
-
-        iw = self.sa(img, word)
-        iw = self.avg_pool(iw)
-        iw = iw.view(iw.size(0), -1) #batch_size x 1024
-        #iw = self.linear(iw)
-        return iw 
-        
 
 
 class MultiHeadAttention(nn.Module):
@@ -499,33 +430,75 @@ class MultiHeadAttention(nn.Module):
         return context
 
 
-class SentenceAttention(nn.Module):
+
+class WordLevelCFA(nn.Module):
+    def __init__(self, channel_dim, scale=2):
+        super(WordLevelCFA,self).__init__()
+        self.channel_dim = channel_dim
+        self.bn_img = nn.BatchNorm2d(channel_dim)
+        self.sa = SelfAttention(channel_dim, scale)
+        self.avg_pool = nn.AvgPool2d(kernel_size = 2)
+        self.maxpool = nn.MaxPool2d(kernel_size=2)
+        self.conv = nn.Conv2d(256, channel_dim, kernel_size=(3, 3), padding=1)
+        self.relu = nn.ReLU()
+        self.ln1 = nn.LayerNorm([64, 8, 8])
+        self.ln2 = nn.LayerNorm([64, 8, 8])
+        self.pl_cfa = ParagraphLevelCFA()
+        self.linear = nn.Linear(1088, 1024)
+        
+
+    def forward(self, img: Tensor, word: Tensor, gl_img:Tensor, sent: Tensor) -> Tensor:
+        img = self.maxpool(self.relu(self.conv(img)))
+        img = self.bn_img(img)
+        word = torch.bmm(word, word.transpose(1, 2)) / np.sqrt(self.channel_dim) #batch x 64 x 64
+        word = word.unsqueeze(-1).view(word.size(0), word.size(1), 8, 8)
+
+        img = self.sa(img, img)
+        iw = self.ln1(img)
+        iw = self.sa(img, word) #img, word
+        #iw = self.avg_pool(iw)
+        iw = self.ln2(iw)
+        iw = self.maxpool(iw)
+        iw = iw.view(iw.size(0), -1) #batch_size x 1024
+
+        img_sent = self.pl_cfa(gl_img, sent)
+        iw = torch.cat((iw, img_sent), dim=1)
+        iw = self.linear(iw)
+        return iw 
+   
+
+class ParagraphLevelCFA(nn.Module):
     def __init__(self):
-        super(SentenceAttention, self).__init__()
+        super(ParagraphLevelCFA, self).__init__()
 
-        self.mha = torch.nn.MultiheadAttention(embed_dim = 256, num_heads = 1, dropout=0.1, batch_first=True)
-        #self.linear = nn.Linear(1024, 512)
+        self.mha = torch.nn.MultiheadAttention(embed_dim = 64, num_heads = 1, dropout=0.1, batch_first=True)
+        #self.linear = nn.Linear(256, 256)
+        self.ln3 = nn.LayerNorm(64)
 
-    def forward(self, img: Tensor, sent: Tensor) -> Tensor:
+    def forward(self, img: Tensor, sent_emb: Tensor) -> Tensor:
         bs = img.size(0)
-        img = img.contiguous().view(bs, 2, 256)
-        sent = sent.contiguous().view(bs, 1, 256)
+        img = img.contiguous().view(bs, 8, 64)
+        sent_emb = sent_emb.contiguous().view(bs, 1, 64)
 
-        gs = self.mha(sent, img, img)
-        gs = gs[0].contiguous().view(bs, -1) #batch_size x 1024
-        #iw = self.linear(iw)
-        return gs 
+        sent_feats = self.mha(sent_emb, img, img)
+        sent_feats = sent_feats[0].contiguous().view(bs, -1) #batch_size x 64
+        self.ln3(sent_feats)
+        return sent_feats  
+
 
 
 class ConcatAttention(nn.Module):
     def __init__(self):
         super(ConcatAttention, self).__init__()
-        self.mha = torch.nn.MultiheadAttention(embed_dim = 256, num_heads = 1, dropout=0.5, batch_first=True)
+        self.mha = torch.nn.MultiheadAttention(embed_dim = 128, num_heads = 1, dropout=0.2, batch_first=True)
+        self.linear_project = nn.Linear(768, 128)
 
-    def forward(self, img: Tensor, sent: Tensor) -> Tensor:
+    def forward(self, img: Tensor, sent_emb_org: Tensor) -> Tensor:
         bs = img.size(0) 
-        patch = torch.cat((img, sent), dim = 1)
-        patch = patch.contiguous().view(bs, 3, 256)
+        sent_emb_org = self.linear_project(sent_emb_org)
+
+        patch = torch.cat((img, sent_emb_org), dim = 1)
+        patch = patch.contiguous().view(bs, 5, 128)
         patch = self.mha(patch, patch, patch)
         patch = patch[0].contiguous().view(bs, -1) 
         return patch 
@@ -535,6 +508,9 @@ class ConcatAttention(nn.Module):
 if __name__ == "__main__":
     #ca = CrossAttention()
     #summary(ca, [(256, 16, 16), (256, 23)], device="cpu")
-
-    sa = SentenceAttention()
-    summary(sa, [(512,), (256,)], device="cpu")
+    bs = 16
+    img = torch.randn((bs, 512))
+    sent_emb_org = torch.randn((bs, 768))
+    p = ConcatAttention()
+    sent_feats = p(img, sent_emb_org)
+    print(sent_feats.shape)

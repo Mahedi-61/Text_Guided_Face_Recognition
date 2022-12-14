@@ -5,6 +5,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 from tqdm import tqdm 
+import os 
 
 ROOT_PATH = osp.abspath(osp.join(osp.dirname(osp.abspath(__file__)),  ".."))
 sys.path.insert(0, ROOT_PATH)
@@ -41,27 +42,36 @@ def get_features(model, imgs):
     return img_features, word_features
 
 
-def calculate_scores(y_score, y_true):
+def calculate_scores(y_score, y_true, args):
     # sklearn always takes (y_true, y_pred)
     fprs, tprs, threshold = metrics.roc_curve(y_true, y_score)
     eer = fprs[np.nanargmin(np.absolute((1 - tprs) - fprs))]
     auc = metrics.auc(fprs, tprs)
+
     str_scores = "\nAUC {:.4f} | EER {:.4f}".format(auc, eer)
     print(str_scores)
-    return str_scores 
 
+    if args.is_roc == True:
+        data_dir = "./checkpoints/celeba/Fusion/data"
+
+        with open(os.path.join(data_dir, args.roc_file + '.npy'), 'wb') as f:
+            np.save(f, y_true)
+            np.save(f, y_score)
 
 
 def test(test_dl, model, net, text_encoder, text_head, args):
     device = args.device
-    if net is not None: net.eval()
+    net.eval()
+    text_encoder.eval()
+    text_head.eval()
     preds = []
     labels = []
 
     loop = tqdm(total=len(test_dl))
     for step, data in enumerate(test_dl, 0):
         if args.using_BERT == True: 
-            img1, img2, words_emb1, words_emb2, word_vector1, word_vector2, sent_emb1, sent_emb2, pair_label = prepare_test_data_Bert(data, text_encoder, text_head)
+            img1, img2, words_emb1, words_emb2, word_vector1, word_vector2, sent_emb1, sent_emb2, \
+                sent_emb_org1, sent_emb_org2, pair_label = prepare_test_data_Bert(data, text_encoder, text_head)
 
         elif args.using_BERT == False:
             img1, img2, words_emb1, words_emb2, sent_emb1, sent_emb2, pair_label = prepare_test_data(data, text_encoder, text_head)
@@ -75,6 +85,13 @@ def test(test_dl, model, net, text_encoder, text_head, args):
         global_feat1,  local_feat1 = get_features(model, img1)
         global_feat2,  local_feat2 = get_features(model, img2)
 
+        sent_emb1 = sent_emb1.to(device)
+        sent_emb2 = sent_emb2.to(device)
+
+        sent_emb_org1 = sent_emb_org1.to(device)
+        sent_emb_org2 = sent_emb_org2.to(device)
+
+
         # sentence & word featurs 
         if args.fusion_type == "concat":
             if args.using_BERT == False:
@@ -82,19 +99,27 @@ def test(test_dl, model, net, text_encoder, text_head, args):
                 out2 =  torch.cat((global_feat2, sent_emb2), dim=1)
 
             elif  args.using_BERT == True:
-                out1 =  torch.cat((global_feat1, word_vector1, sent_emb1), dim=1) 
-                out2 =  torch.cat((global_feat2, word_vector2, sent_emb2), dim=1)
+                out1 =  torch.cat((global_feat1, word_vector1), dim=1) #sent_emb1
+                out2 =  torch.cat((global_feat2, word_vector2), dim=1) #sent_emb2
 
-        elif args.fusion_type == "linear" or args.fusion_type == "sentence_attention" or args.fusion_type == "concat_attention":
-            out1 =  net(global_feat1, sent_emb1)
-            out2 =  net(global_feat2, sent_emb2)
+        elif args.fusion_type == "linear":
+            out1 =  net(global_feat1, word_vector1)
+            out2 =  net(global_feat2, word_vector2)
+
+        elif args.fusion_type == "concat_attention":
+            out1 =  net(global_feat1, word_vector1)
+            out2 =  net(global_feat2, word_vector2)
+
+        elif args.fusion_type == "paragraph_attention":
+            out1 =  net(global_feat1,  sent_emb_org1)
+            out2 =  net(global_feat2,  sent_emb_org2)
 
         elif args.fusion_type == "cross_attention":
             words_emb1 = words_emb1.to(device).requires_grad_()
             words_emb2 = words_emb2.to(device).requires_grad_()
 
-            out1 = net(local_feat1, words_emb1)
-            out2 = net(local_feat2, words_emb2)
+            out1 = net(local_feat1, words_emb1, global_feat1, sent_emb1)
+            out2 = net(local_feat2, words_emb2, global_feat2, sent_emb2)
 
         del local_feat1, local_feat2, words_emb1, words_emb2
 
@@ -109,6 +134,5 @@ def test(test_dl, model, net, text_encoder, text_head, args):
 
     loop.close()
     best_acc, best_th = cal_accuracy(preds, labels)
-    str_socres = calculate_scores(preds, labels)
+    calculate_scores(preds, labels, args)
     print("accuracy: %0.4f; threshold %0.4f" %(best_acc, best_th))
-    return str_socres

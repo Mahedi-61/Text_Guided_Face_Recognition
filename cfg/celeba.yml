@@ -4,8 +4,8 @@ data_dir: ./data/celeba
 test_pair_list: ./data/celeba/celeba/celeba_valid_pair.txt  
 checkpoints_path: ./checkpoints
 load_model_path: ./weights/celeba/FE/resnet18_celeba_110.pth
-resume_model_path: ./weights/celeba/state_epoch_lstm_linear_009.pth
-text_encoder_path: ./weights/celeba/Pretrain/Bert/arcface_text_encoder_bert_second_10.pth
+resume_model_path: ./weights/celeba/Fusion/bert_cross_attention_epoch_.pth
+text_encoder_path: ./weights/celeba/Fusion/arcface_text_encoder_bert_7.pth
 resume_epoch: 1
 
 # machine setup 
@@ -26,27 +26,34 @@ loss: focal_loss
 optimizer: sgd 
 use_se: False
 
+
 # training settings 
-lr_image_train: 0.05   #0.05 for linear fusion 
-lr_step: 5
+lr_image_train: 0.01   #0.05 for linear fusion 
+lr_step: 4
 gamma: 0.5  
 weight_decay: 0.0005
-max_epoch: 12 
-batch_size: 32 
+lr_head: 0.001
+patience: 2 
+factor: 0.70
+temperature: 1.0
+
+max_epoch: 28 
+batch_size: 16 
 test_interval: 1
 save_interval: 1
-temperature: 1.0
 trainable: False
 
 # fusion arch
-fusion_type: concat #concat_attention #concat, linear, sentence_attention #cross_attention 
-fusion_final_dim: 768
-clip_loss: True 
+fusion_type: linear #cross_attention, linear, paragraph_attention, concat
+fusion_final_dim: 512 
+aux_feat_dim_per_granularity: 64
+
+#save
+roc_file: mcfanet
 
 # flags
 prev_weight: False  
 do_test: True
-is_second_step: False 
 
 # encoder settings
 rnn_type: LSTM #GRU 

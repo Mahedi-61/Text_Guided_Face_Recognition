@@ -188,13 +188,9 @@ class BERT_ENCODER(nn.Module):
         self.model = BertModel.from_pretrained(args.bert_config)
         #self.model = AutoModel.from_pretrained(args.bert_config)
         for p in self.model.parameters():
-            if args.is_second_step == False:
-                trainable =  True 
-            else:
-                trainable = False
-            p.requires_grad = trainable
+            p.requires_grad = True
 
-        print("Bert encoder trainable: ", trainable)
+        print("Bert encoder trainable: ", True)
 
     def forward(self, captions, mask):
         outputs = self.model(captions, attention_mask=mask)
@@ -215,16 +211,23 @@ class BERT_ENCODER(nn.Module):
 
 
 class Bert_Word_Mapping(nn.Module):
-    def __init__(self):
+    def __init__(self, feat_dim):
         super(Bert_Word_Mapping, self).__init__()
         Ks = [1, 2, 3]
         in_channel = 1
-        out_channel = 64
+        out_channel = feat_dim #* 4
         self.convs1 = nn.ModuleList([nn.Conv2d(in_channel, out_channel, (K, 768)) for K in Ks]) 
+
+        self.dropout = nn.Dropout(0.1)
+        #self.mapping = nn.Linear(out_channel, feat_dim)
 
     def forward(self, words_emb):
         x = words_emb.unsqueeze(1)  # (batch_size, 1, token_num, embedding_dim)
         x = [F.relu(conv(x)).squeeze(3) for conv in self.convs1]  # [(batch_size, out_channel, W), ...]*len(Ks)
+
+        #remove these 2 lines to skip second projection
+        #x = [self.dropout(i.transpose(2, 1)) for i in x] 
+        #x = [self.mapping(i).transpose(2, 1) for i in x]
         return x
 
 
@@ -232,11 +235,10 @@ class Bert_Word_Mapping(nn.Module):
 class BERTHeading(nn.Module):
     def __init__(self, args):
         super(BERTHeading, self).__init__()
-        self.sentence_feat = ProjectionHead(embedding_dim=768, projection_dim=64)
-        self.word_feat = nn.Linear(768, 64)
-        self.bwm = Bert_Word_Mapping()
-        #self.dropout = nn.Dropout(0.1)
-        #self.mapping = nn.Linear(out_channel, 256)
+        self.feat_dim = args.aux_feat_dim_per_granularity
+        self.sentence_feat = ProjectionHead(embedding_dim=768, projection_dim=self.feat_dim)
+        self.word_feat = nn.Linear(768, self.feat_dim)
+        self.bwm = Bert_Word_Mapping(self.feat_dim)
 
     def get_each_word_feature(self, x):
         bs = x[0].size(0)
@@ -247,7 +249,7 @@ class BERTHeading(nn.Module):
         for i in range(bs):
             t = [torch.amax(torch.stack((a[i, j], b[i, j], c[i, j])), dim=0) for j in range(18)]
             t +=  [torch.amax(torch.stack((a[i, 18], b[i, 18])), dim=0)]
-            t += [torch.cuda.FloatTensor(a[i, 19])]  #[torch.amax(torch.stack((a[i, 19], a[i, 19])), dim=0)]
+            t += [torch.cuda.FloatTensor(a[i, 19])]  
             t = torch.stack(t)
             code.append(t)
 
@@ -422,8 +424,8 @@ class ResNet18_ArcFace_ENCODER(nn.Module):
 class ResNet18_ArcFace_Heading(nn.Module):
     def __init__(self, args):
         super(ResNet18_ArcFace_Heading, self).__init__()
-        self.project_global = ProjectionHead(embedding_dim=512, projection_dim=64)
-        self.project_local =  ProjectionHead(embedding_dim=256, projection_dim=64)
+        self.project_global = ProjectionHead(embedding_dim=512, projection_dim=args.aux_feat_dim_per_granularity)
+        self.project_local =  ProjectionHead(embedding_dim=256, projection_dim=args.aux_feat_dim_per_granularity)
         
     def forward(self, local_image, global_image):
         local_image = local_image.permute((0, 2, 3, 1))
@@ -642,11 +644,10 @@ class MANIGAN_Bert_Encoder():
 if __name__ == "__main__":
     from easydict import EasyDict as edict
     args = edict()
+    args.aux_feat_dim_per_granularity = 64 
 
-    """
-    bh = BERTHeading(args)
-    words_embd = torch.randn(16, 20, 768)
-    sent_embd = torch.randn(16, 768)
-    words_emb, word_vector, sent_emb = bh(words_embd, sent_embd)
-    print(words_emb.shape)
-    """
+    r = ResNet18_ArcFace_ENCODER(args)
+    img = torch.randn((16, 1, 128, 128))
+    features, x = r(img)
+    print(x.shape)
+    print(features.shape)

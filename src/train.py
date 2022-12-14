@@ -7,7 +7,7 @@ import numpy as np
 import pprint
 import torch
 from tqdm import tqdm 
-
+import itertools
 
 ROOT_PATH = osp.abspath(osp.join(osp.dirname(osp.abspath(__file__)),  ".."))
 sys.path.insert(0, ROOT_PATH)
@@ -56,34 +56,41 @@ def get_margin(args):
     return metric_fc
 
 
-def get_optimizer(args, net, metric_fc):
-    params = [{"params": net.parameters(), "lr": 0.001}, 
-             {"params": metric_fc.parameters(), 
-              "lr" : args.lr_image_train, 
-              "weight_decay" : args.weight_decay}
-            ]
+def get_optimizer(args, net, metric_fc, text_encoder, text_head):
+    params = [{"params": metric_fc.parameters(), "lr" : args.lr_image_train, "weight_decay" : args.weight_decay}]
+    params_en = [{"params": text_encoder.parameters(), "lr" : 5e-5}]
+    params_head = [{"params": itertools.chain(text_head.parameters(), net.parameters()), "lr": args.lr_head}]
 
     if args.optimizer == 'sgd':
         optimizer = torch.optim.SGD(params)
+        optimizer_en = torch.optim.AdamW(params_en,  betas=(0.9, 0.999), weight_decay=0.01)
+        optimizer_head = torch.optim.Adam(params_head, weight_decay=args.weight_decay) 
 
     elif args.optimizer == 'adam':
-        optimizer = torch.optim.Adam([{'params': net.parameters()}, 
-                                      {'params': metric_fc.parameters()}],
-                                      lr=args.lr_image_train, 
-                                      weight_decay=args.weight_decay)
-    return optimizer
+        optimizer = torch.optim.Adam(params)
+        optimizer_head = torch.optim.Adam(params_head,  betas=(0.5, 0.999)) 
+    return optimizer, optimizer_en, optimizer_head
 
 
 
-def train(train_dl, model, net, metric_fc, text_encoder, text_head, criterion, optimizer, scheduler, args):
+def train(train_dl, model, net, metric_fc, text_encoder, text_head, criterion, 
+        optimizer, optimizer_en, optimizer_head, scheduler, lr_scheduler_en, lr_scheduler_head, args):
+
     device = args.device
-    net = net.train()
-    metric_fc = metric_fc.train()
+    net.train()
+    metric_fc.train()
+    if args.current_epoch < 11:
+        text_encoder.train()
+    else:
+        text_encoder.eval()
+
+    text_head.train()
 
     loop = tqdm(total=len(train_dl))
+    total_loss = 0
     for step, data in enumerate(train_dl, 0):
         if args.using_BERT == True:
-            imgs, words_emb, word_vector, sent_emb, keys, label = \
+            imgs, words_emb, word_vector, sent_emb, sent_emb_org, keys, label = \
                     prepare_train_data_for_Bert(data, text_encoder, text_head)
             cap_lens = None 
 
@@ -91,60 +98,87 @@ def train(train_dl, model, net, metric_fc, text_encoder, text_head, criterion, o
             imgs, words_emb, sent_emb, keys, label, cap_lens = \
                     prepare_train_data(data, text_encoder, text_head)
         
-
+        # load cuda
+        if args.using_BERT == True: word_vector = word_vector.to(device).requires_grad_()
         imgs = imgs.to(device).requires_grad_()
+        words_emb = words_emb.to(device).requires_grad_()
         sent_emb = sent_emb.to(device).requires_grad_()
+        sent_emb_org = sent_emb_org.to(device).requires_grad_()
         label = label.to(device)
         
         global_feats, local_feats = get_features(model, imgs)
-        
-        if args.fusion_type == "linear" or args.fusion_type == "sentence_attention" or args.fusion_type == "concat_attention":
-            output = net(global_feats, sent_emb)
+
+        if args.fusion_type == "linear":
+            output = net(global_feats, word_vector)
+
+        elif args.fusion_type == "concat":
+            output = net(global_feats, word_vector)
+
+        elif args.fusion_type == "concat_attention":
+            output = net(global_feats, word_vector)
+
+        elif args.fusion_type == "paragraph_attention":
+            output = net(global_feats, sent_emb_org)
 
         elif args.fusion_type == "cross_attention":
-            output = net(local_feats, words_emb)
+            output = net(local_feats, words_emb, global_feats, sent_emb)
+
 
         output = metric_fc(output, label)
         loss = criterion(output, label)
+        total_loss += loss
+
         optimizer.zero_grad()
+        if args.current_epoch < 11: optimizer_en.zero_grad()
+        optimizer_head.zero_grad()
         loss.backward()
+
         optimizer.step()
+        if args.current_epoch < 11: optimizer_en.step()
+        optimizer_head.step()
+        lr_scheduler_en.step()
+
 
         # update loop information
         loop.update(1)
         loop.set_description(f'Training Epoch [{args.current_epoch}/{args.max_epoch}]')
         loop.set_postfix()
-    
+
     loop.close()
     scheduler.step()
+    lr_scheduler_head.step(total_loss)
+
     print("learning rate: ", scheduler.get_last_lr())
-    str_loss = " | loss {:0.4f}".format(loss.item())
+    str_loss = " | loss {:0.4f}".format(total_loss.item() / step)
     print(str_loss)
     del global_feats, output
-    return str_loss + "\n"  
     
 
 
 def main(args):
     # prepare dataloader, models, data
-    p_loss = ""
-
     train_dl, train_ds, valid_dl, valid_ds = prepare_dataloader(args, split="train", transform=None)
     test_dl, test_ds = prepare_dataloader(args, split="test", transform=None)
 
     if args.using_BERT == False:
         args.vocab_size = train_ds.n_words
 
-    text_encoder, text_head = prepare_text_encoder(args)
+    del train_ds, test_ds, valid_dl, valid_ds 
+
+    text_encoder, text_head = prepare_text_encoder(args, test=False)
     
     model = prepare_model(args) #cuda + parallel + grd. false + eval
     net = prepare_fusion_net(args) #cuda + parallel
     metric_fc = get_margin(args) #cuda + parallel
 
-    optimizer = get_optimizer(args, net, metric_fc)
-    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, 
+    opt, opt_en, opt_head = get_optimizer(args, net, metric_fc, text_encoder, text_head)
+    scheduler = torch.optim.lr_scheduler.StepLR(opt, 
                                     step_size=args.lr_step, 
                                     gamma=args.gamma)
+
+    
+    lr_scheduler_head = torch.optim.lr_scheduler.ReduceLROnPlateau(
+            opt_head, mode="min", patience=args.patience, factor=args.factor)
 
     criterion = get_loss(args)
     
@@ -153,28 +187,31 @@ def main(args):
     if args.resume_epoch!=1:
         print("loading checkpoint; epoch: ", args.resume_epoch)
         strat_epoch = args.resume_epoch+1
-        net, metric_fc, optimizer = load_models(net, metric_fc, optimizer, args.resume_model_path)
+        net, metric_fc, opt = load_models(net, metric_fc, opt, args.resume_model_path)
     
 
     #pprint.pprint(args)
     print("Start Training")
+    args.is_roc = False 
     for epoch in range(strat_epoch, args.max_epoch + 1):
         torch.cuda.empty_cache()
-        args.current_epoch = epoch 
-        p_loss += train(train_dl, model, net, metric_fc, text_encoder, text_head, criterion, optimizer, scheduler, args)
+        args.current_epoch = epoch
+        print('Reset scheduler')
+        lr_scheduler_en = torch.optim.lr_scheduler.CosineAnnealingLR(opt_en, T_max=1000, eta_min=1e-5)
+
+        train(train_dl, model, net, metric_fc, text_encoder, text_head, criterion, 
+                    opt, opt_en, opt_head, scheduler, lr_scheduler_en, lr_scheduler_head, args)
     
         # save
-        if epoch % args.save_interval==0:
-            save_models(net, metric_fc, optimizer, epoch, args)
-        
-        if ((args.do_test == True) and (epoch % args.test_interval == 0)):
-            print("\nLet's test the model")
-            p_loss += test(test_dl, model, net, text_encoder, text_head, args)
+        if (epoch > 8):
+            if epoch % args.save_interval==0:
+                save_models(net, metric_fc, opt, text_encoder, text_head, epoch, args)
+            
+            if ((args.do_test == True) and (epoch % args.test_interval == 0)):
+                print("\nLet's test the model")
+                test(test_dl, model, net, text_encoder, text_head, args)
 
-            #write the loss in a text file
-            with open(os.path.join(ROOT_PATH, "output.txt"), "w") as f:
-                f.write(p_loss)
-        
+
 
 if __name__ == "__main__":
     args = merge_args_yaml(parse_args())
