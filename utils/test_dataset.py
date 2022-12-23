@@ -16,6 +16,7 @@ class TextImgTestDataset(data.Dataset):
         self.data_dir = args.data_dir
         self.dataset_name = args.dataset_name
         self.embeddings_num = args.captions_per_image
+        self.model_type = args.model_type 
         self.filenames = filenames
         self.captions = captions 
         
@@ -99,8 +100,8 @@ class TextImgTestDataset(data.Dataset):
             bbox1 = None
             bbox2 = None 
 
-        img1 = get_imgs(img1_name, self.config, bbox1, self.transform)
-        img2 = get_imgs(img2_name, self.config, bbox2, self.transform)
+        img1 = get_imgs(img1_name, self.config, bbox1, self.transform, self.model_type)
+        img2 = get_imgs(img2_name, self.config, bbox2, self.transform, self.model_type)
 
         real_index1 = self.filenames.index(key1)
         real_index2 = self.filenames.index(key2)

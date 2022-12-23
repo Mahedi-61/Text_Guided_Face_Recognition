@@ -9,7 +9,7 @@ import torch
 ROOT_PATH = osp.abspath(osp.join(osp.dirname(osp.abspath(__file__)),  ".."))
 sys.path.insert(0, ROOT_PATH)
 from utils.utils import merge_args_yaml, load_fusion_net
-from utils.prepare import prepare_dataloader, prepare_model, prepare_text_encoder, prepare_fusion_net
+from utils.prepare import prepare_dataloader, prepare_model, prepare_text_encoder, prepare_fusion_net, prepare_adaface
 from utils.modules import test
 
 
@@ -28,19 +28,26 @@ def main(args):
     test_dl, test_ds = prepare_dataloader(args, split="test", transform=None)
 
     if args.using_BERT == False:
-        args.vocab_size = test_ds.n_words
+        args.vocab_size = test_ds.n_words 
+    
+    if args.model_type == "arcface":
+            model = prepare_model(args)
 
-    for i in range(2, 7):
-        args.text_encoder_path = "./checkpoints/celeba/Fusion/arcface_text_encoder_bert_linear_%d.pth" % i
+    elif args.model_type == "adaface":
+            model = prepare_adaface(args)
+
+    # load from checkpoint
+    net = prepare_fusion_net(args)
+
+    for i in [20]:
+        args.text_encoder_path = "./checkpoints/celeba/Fusion/final_cross_att/arcface_text_encoder_bert_cross_attention_%d.pth" % i
         text_encoder, text_head = prepare_text_encoder(args, test=True)
-        model = prepare_model(args)
-        
-        # load from checkpoint
-        net = prepare_fusion_net(args)
-        print("loading checkpoint; epoch: ", i)
-        load_path = "./checkpoints/celeba/Fusion/bert_linear_epoch_%d.pth" % i
-        net = load_fusion_net(net, load_path) 
 
+        if args.fusion_type != "concat":
+            print("loading checkpoint; epoch: ", i)
+            load_path = "./checkpoints/celeba/Fusion/final_cross_att/bert_cross_attention_epoch_%d.pth" % i
+            net = load_fusion_net(net, load_path) 
+        
         #pprint.pprint(args)
         print("Start Testing")
         args.is_roc = True   

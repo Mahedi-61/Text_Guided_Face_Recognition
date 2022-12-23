@@ -55,7 +55,7 @@ def rm_sort(caption, sorted_cap_idxs):
 
 
 
-def get_imgs(img_path, config, bbox=None, transform=None):
+def get_imgs(img_path, config, bbox=None, transform=None, model_type="arcface"):
     """
     if config == "DAMSM":
         img = Image.open(img_path).convert('RGB')
@@ -64,10 +64,17 @@ def get_imgs(img_path, config, bbox=None, transform=None):
             transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))])
     """
 
-    img = Image.open(img_path).convert('L')
-    norm = transforms.Compose([
+    if model_type == "arcface":
+        img = Image.open(img_path).convert('L')
+        norm = transforms.Compose([
+            transforms.ToTensor(),
+            transforms.Normalize((0.5), (0.5))])
+
+    elif model_type == "adaface":
+        img = Image.open(img_path).convert('RGB')
+        norm = transforms.Compose([
         transforms.ToTensor(),
-        transforms.Normalize((0.5), (0.5))])
+        transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))])
 
     width, height = img.size
     if bbox is not None:
@@ -84,6 +91,10 @@ def get_imgs(img_path, config, bbox=None, transform=None):
         img = transform(img)
 
     img = norm(img)
+
+    if model_type == "adaface": 
+        permute = [2, 1, 0]
+        img = img[permute, :, :] #RGB --> BGR
     return img
 
 

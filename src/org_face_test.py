@@ -10,8 +10,9 @@ ROOT_PATH = osp.abspath(osp.join(osp.dirname(osp.abspath(__file__)),  ".."))
 sys.path.insert(0, ROOT_PATH)
 
 from utils.utils import   merge_args_yaml
-from utils.prepare import prepare_dataloader, prepare_model
+from utils.prepare import prepare_dataloader, prepare_model, prepare_adaface
 from utils.modules import * 
+
 
 def test(test_dl, model, args):
     device = args.device
@@ -46,7 +47,7 @@ def test(test_dl, model, args):
     calculate_scores(preds, labels, args)
     print("accuracy: %0.4f; threshold %0.4f" %(best_acc, best_th))
 
-   
+
 def parse_args():
     # Training settings
     parser = argparse.ArgumentParser(description='CGFG')
@@ -67,7 +68,11 @@ def main(args):
 
 
     print("loading models ...")
-    model = prepare_model(args)
+    if args.model_type == "adaface":
+        model = prepare_adaface(args)
+        
+    elif args.model_type == "arcface":
+        model = prepare_model(args)
   
     print("Start Testing")
     args.is_roc = True   

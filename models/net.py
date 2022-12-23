@@ -330,7 +330,7 @@ class Backbone(Module):
         norm = torch.norm(x, 2, 1, True)
         global_feat = torch.div(x, norm)
 
-        return local_feat, global_feat, norm
+        return local_feat, global_feat, norm 
 
 
 

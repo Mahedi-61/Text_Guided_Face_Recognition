@@ -5,7 +5,8 @@ from utils.test_dataset import TextImgTestDataset
 
 from utils.utils import load_model_weights, load_pretrained_arch_model
 from models.models import RNN_ENCODER, BERTHeading, ResNet18_ArcFace_ENCODER, BERT_ENCODER, resnet_face18
-from models.fusion_nets import ConcatFusion, LinearFusion, WordLevelCFA, ParagraphLevelCFA, ConcatAttention
+from models.fusion_nets import ConcatFusion, LinearFusion, WordLevelCFA, ParagraphLevelCFA, ConcatAttention, WordLevelCFA_LSTM
+from models import net 
 from utils.dataset_utils import *
 
 
@@ -49,7 +50,7 @@ def prepare_text_encoder(args, test):
     elif args.using_BERT == False:
         text_encoder = RNN_ENCODER(args, nhidden=args.embedding_dim)
         state_dict = torch.load(args.text_encoder_path, map_location='cpu')
-        text_encoder = load_model_weights(text_encoder, state_dict["model"])
+        text_encoder = load_model_weights(text_encoder, state_dict["model"]) 
         text_encoder.cuda()
         text_head = None 
 
@@ -62,7 +63,6 @@ def prepare_text_encoder(args, test):
                 p.requires_grad = False  
 
     return text_encoder, text_head
-
 
 
 def prepare_model(args):
@@ -80,6 +80,26 @@ def prepare_model(args):
     return model 
 
 
+#### model for Ada Face 
+def prepare_adaface(args):
+    device = args.device
+    architecture = "ir_18"
+
+    args.load_model_path = "weights/celeba/FE/adaface_ir18_webface4m.ckpt"
+    model = net.build_model(architecture)
+    
+    statedict = torch.load(args.load_model_path)['state_dict']
+    model_statedict = {key[6:]:val for key, val in statedict.items() if key.startswith('model.')}
+    model.load_state_dict(model_statedict)
+    
+    model.to(device)
+    model = torch.nn.DataParallel(model, device_ids=args.gpu_id)
+    for p in model.parameters():
+        p.requires_grad = False
+    model.eval()
+    return model 
+
+
 def prepare_fusion_net(args):
     # fusion models
     if args.fusion_type == "concat":
@@ -89,7 +109,11 @@ def prepare_fusion_net(args):
         net = LinearFusion(final_dim = args.fusion_final_dim)
 
     elif args.fusion_type == "cross_attention":
-        net = WordLevelCFA(channel_dim = args.aux_feat_dim_per_granularity)
+        if args.using_BERT == False: 
+            net = WordLevelCFA_LSTM(channel_dim = 256)
+
+        elif args.using_BERT == True:  
+            net = WordLevelCFA(channel_dim = args.aux_feat_dim_per_granularity)
 
     elif args.fusion_type == "concat_attention":
         net = ConcatAttention()
@@ -133,7 +157,6 @@ def get_one_batch_train_data_Bert(dataloader):
 
 def prepare_test_data(data, text_encoder, text_head):
     img1, img2, cap1, cap2, cap_len1, cap_len2, pair_label = data
-
     cap1, sorted_cap_len1, sorted_cap_idxs = sort_sents(cap1, cap_len1)
     words_emb1, sent_emb1 = encode_tokens(text_encoder, text_head, cap1, sorted_cap_len1)
     sent_emb1 = rm_sort(sent_emb1, sorted_cap_idxs)

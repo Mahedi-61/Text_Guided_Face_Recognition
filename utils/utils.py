@@ -75,25 +75,31 @@ def load_model_weights(model, weights, train=True):
 def save_models(net, metric_fc, optimizer, text_encoder, text_head, epoch, args):
     save_dir = os.path.join(args.checkpoints_path, 
                             args.dataset_name, 
-                            args.CONFIG_NAME)
+                            args.CONFIG_NAME, args.model_type)
     mkdir_p(save_dir)
 
-    name = '%s_%s_epoch_%03d.pth' % (args.en_type, args.fusion_type, epoch)
+    name = '%s_%s_%s_epoch_%d.pth' % (args.en_type, args.model_type, args.fusion_type, epoch)
     state_path = os.path.join(save_dir, name)
     state = {'model': {'net': net.state_dict(), 'metric_fc': metric_fc.state_dict()},
             'optimizer': {'optimizer': optimizer.state_dict()}}
     torch.save(state, state_path)
 
-    # saving text_encoder
-    if text_head is not None: 
+    if args.using_BERT == True:
         checkpoint_text_en = {
             'model': text_encoder.state_dict(),
             'head': text_head.state_dict()
         }
 
-    torch.save(checkpoint_text_en, '%s/arcface_text_encoder_%s_%s_%d.pth' % 
-                                (save_dir, args.en_type, args.fusion_type, epoch))
+        torch.save(checkpoint_text_en, '%s/%s_text_encoder_%s_%s_%d.pth' % 
+                                (save_dir, args.en_type, args.model_type, args.fusion_type, epoch))
 
+    elif args.using_BERT == False:
+        checkpoint_text_en = {
+            'model': text_encoder.state_dict(),
+        }
+
+        torch.save(checkpoint_text_en, '%s/lstm_text_encoder_%s_%s_%d.pth' % 
+                                (save_dir, args.en_type, args.fusion_type, epoch))
 
 
 def load_models(net, metric_fc, optim, path):

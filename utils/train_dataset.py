@@ -18,6 +18,7 @@ class TextImgTrainDataset(data.Dataset):
         self.data_dir = args.data_dir
         self.dataset_name = args.dataset_name
         self.using_BERT = args.using_BERT
+        self.model_type = args.model_type
         
         if split == "train":
             self.split = split 
@@ -99,7 +100,7 @@ class TextImgTrainDataset(data.Dataset):
             img_extension = ".png"
 
         img_name = "%s/%s/%s%s" % (data_dir, img_folder, key, img_extension)
-        imgs = get_imgs(img_name, self.config, bbox, self.transform)
+        imgs = get_imgs(img_name, self.config, bbox, self.transform, self.model_type)
 
         # random select a sentence
         sent_ix = random.randint(0, self.embeddings_num)

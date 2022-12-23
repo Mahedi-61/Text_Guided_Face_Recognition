@@ -31,7 +31,7 @@ def cal_accuracy(y_score, y_true):
 
 
 def get_features(model, imgs):
-    img_features, word_features = model(imgs)
+    word_features, img_features = model(imgs)
     """
     flip_imgs = torch.squeeze(imgs, 1)
     a = torch.stack([torch.fliplr(flip_imgs[i]) for i in range(0, flip_imgs.size(0))])
@@ -40,6 +40,11 @@ def get_features(model, imgs):
     del flip_img_features
     """ 
     return img_features, word_features
+
+
+def get_features_adaface(model, imgs):
+    word_features, img_features, norm = model(imgs)
+    return img_features, word_features, norm 
 
 
 def calculate_scores(y_score, y_true, args):
@@ -59,11 +64,12 @@ def calculate_scores(y_score, y_true, args):
             np.save(f, y_score)
 
 
+
 def test(test_dl, model, net, text_encoder, text_head, args):
     device = args.device
     net.eval()
     text_encoder.eval()
-    text_head.eval()
+    if args.using_BERT == True: text_head.eval()
     preds = []
     labels = []
 
@@ -82,15 +88,20 @@ def test(test_dl, model, net, text_encoder, text_head, args):
         pair_label = pair_label.to(device)
 
         # get global and local image features from arc face model
-        global_feat1,  local_feat1 = get_features(model, img1)
-        global_feat2,  local_feat2 = get_features(model, img2)
+        if args.model_type == "arcface":
+            global_feat1,  local_feat1 = get_features(model, img1)
+            global_feat2,  local_feat2 = get_features(model, img2)
+
+        elif args.model_type == "adaface":
+            global_feat1,  local_feat1, norm = get_features_adaface(model, img1)
+            global_feat2,  local_feat2, norm = get_features_adaface(model, img2)
 
         sent_emb1 = sent_emb1.to(device)
         sent_emb2 = sent_emb2.to(device)
 
-        sent_emb_org1 = sent_emb_org1.to(device)
-        sent_emb_org2 = sent_emb_org2.to(device)
-
+        if args.using_BERT == True:
+            sent_emb_org1 = sent_emb_org1.to(device)
+            sent_emb_org2 = sent_emb_org2.to(device)
 
         # sentence & word featurs 
         if args.fusion_type == "concat":
@@ -98,28 +109,33 @@ def test(test_dl, model, net, text_encoder, text_head, args):
                 out1 =  torch.cat((global_feat1, sent_emb1), dim=1) 
                 out2 =  torch.cat((global_feat2, sent_emb2), dim=1)
 
-            elif  args.using_BERT == True:
+            elif args.using_BERT == True:
                 out1 =  torch.cat((global_feat1, word_vector1), dim=1) #sent_emb1
                 out2 =  torch.cat((global_feat2, word_vector2), dim=1) #sent_emb2
 
         elif args.fusion_type == "linear":
-            out1 =  net(global_feat1, word_vector1)
-            out2 =  net(global_feat2, word_vector2)
+            if args.using_BERT == True:
+                out1 =  net(global_feat1, word_vector1)
+                out2 =  net(global_feat2, word_vector2)
+
+            elif args.using_BERT == False:
+                out1 =  net(global_feat1, sent_emb1)
+                out2 =  net(global_feat2, sent_emb2)
 
         elif args.fusion_type == "concat_attention":
-            out1 =  net(global_feat1, word_vector1)
-            out2 =  net(global_feat2, word_vector2)
+            out1 =  net(global_feat1, sent_emb1)
+            out2 =  net(global_feat2, sent_emb2)
 
         elif args.fusion_type == "paragraph_attention":
-            out1 =  net(global_feat1,  sent_emb_org1)
-            out2 =  net(global_feat2,  sent_emb_org2)
+            out1 =  net(global_feat1,  sent_emb1)
+            out2 =  net(global_feat2,  sent_emb2)
 
         elif args.fusion_type == "cross_attention":
             words_emb1 = words_emb1.to(device).requires_grad_()
             words_emb2 = words_emb2.to(device).requires_grad_()
 
-            out1 = net(local_feat1, words_emb1, global_feat1, sent_emb1)
-            out2 = net(local_feat2, words_emb2, global_feat2, sent_emb2)
+            out1 = net(local_feat1, words_emb1)
+            out2 = net(local_feat2, words_emb2)
 
         del local_feat1, local_feat2, words_emb1, words_emb2
 

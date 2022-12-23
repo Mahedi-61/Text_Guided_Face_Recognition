@@ -19,10 +19,9 @@ sys.path.insert(0, ROOT_PATH)
 
 from utils.utils import mkdir_p, merge_args_yaml
 from models.losses import clip_loss, sent_loss, words_loss, CMPLoss
-from utils.prepare import prepare_dataloader, prepare_train_data_for_Bert, prepare_train_data
+from utils.prepare import prepare_dataloader, prepare_train_data_for_Bert, prepare_train_data, prepare_adaface
 
-from models.models import (BERT_ENCODER, RNN_ENCODER, CNN_ENCODER,
-                        BERTHeading, ResNet18_ArcFace_ENCODER, ResNet18_ArcFace_Heading)
+from models.models import (BERT_ENCODER, RNN_ENCODER, BERTHeading, ResNet18_ArcFace_ENCODER, ArcFace_Heading)
 
 
 def parse_args():
@@ -41,11 +40,11 @@ def save_encoders(text_encoder, text_head, image_encoder, image_head,
                             optimizer, optimizer_head, args):
 
     if args.using_BERT == True: folder = "Bert"
-    elif args.using_BERT == False: folder = "BiLSTM"
+    elif args.using_BERT == False: folder = "BiLSTM_new"
 
     save_dir = os.path.join(args.checkpoints_path, 
                             args.dataset_name, 
-                            args.CONFIG_NAME, folder)
+                            args.CONFIG_NAME, folder, args.model_type)
     mkdir_p(save_dir)
 
     checkpoint_image_en = {
@@ -54,9 +53,8 @@ def save_encoders(text_encoder, text_head, image_encoder, image_head,
     }
 
 
-    step = "first"
-    torch.save(checkpoint_image_en, '%s/arcface_image_encoder_%s_%s_%d.pth' % 
-                                    (save_dir, args.en_type, step, args.current_epoch))
+    torch.save(checkpoint_image_en, '%s/%s_image_encoder_%s_%d.pth' % 
+                (save_dir, args.model_type, args.en_type, args.current_epoch))
 
     if text_head is not None: 
         checkpoint_text_en = {
@@ -72,9 +70,8 @@ def save_encoders(text_encoder, text_head, image_encoder, image_head,
             'optimizer_head': optimizer_head.state_dict(),
         }
 
-    
-    torch.save(checkpoint_text_en, '%s/arcface_text_encoder_%s_%s_%d.pth' % 
-                                    (save_dir, args.en_type, step, args.current_epoch))
+    torch.save(checkpoint_text_en, '%s/%s_text_encoder_%s_%d.pth' % 
+                (save_dir, args.model_type, args.en_type, args.current_epoch))
 
 
 
@@ -83,7 +80,7 @@ def train(dataloader,  text_encoder, text_head, image_encoder, image_head, optim
 
     text_encoder.train()
     if text_head is not None: text_head.train() 
-    image_encoder.train()
+    image_encoder.eval()
     image_head.train()
 
     batch_size = args.batch_size 
@@ -104,7 +101,7 @@ def train(dataloader,  text_encoder, text_head, image_encoder, image_head, optim
         Text Encoder
         """     
         if args.using_BERT == True:
-            imgs, words_emb, word_vector, sent_emb, keys, class_ids = \
+            imgs, words_emb, word_vector, sent_emb, sent_emb_org, keys, class_ids = \
                     prepare_train_data_for_Bert(data, text_encoder, text_head)
             cap_lens = None 
 
@@ -112,14 +109,20 @@ def train(dataloader,  text_encoder, text_head, image_encoder, image_head, optim
             imgs, words_emb, sent_emb, keys, class_ids, cap_lens = \
                     prepare_train_data(data, text_encoder, text_head)
 
+
         """
         Image Encoder
-        words_features: batch_size x nef x 17 x 17
+        words_features: batch_size x nef x 16 x 16 (arcface) [14x14 for adaface]
         sent_code: batch_size x nef
         """
-        words_features, sent_code = image_encoder(imgs)
+
+        if args.model_type == "adaface":
+            words_features, sent_code, norm = image_encoder(imgs)
+        else:
+            words_features, sent_code = image_encoder(imgs)
+
         words_features, sent_code = image_head(words_features, sent_code)
-        
+
         optimizer.zero_grad()
         optimizer_head.zero_grad() 
         total_loss = 0
@@ -131,10 +134,10 @@ def train(dataloader,  text_encoder, text_head, image_encoder, image_head, optim
             s_loss0, s_loss1 = sent_loss(sent_code, sent_emb, labels, class_ids.numpy(), batch_size, args)
 
             damsm_loss = w_loss0 + w_loss1 + s_loss0 + s_loss1
-            total_damsm_loss += damsm_loss
+            total_damsm_loss += damsm_loss.item()
             total_loss += damsm_loss 
-            w_total_loss += (w_loss0 + w_loss1).data / 2
-            s_total_loss += (s_loss0 + s_loss1).data / 2
+            w_total_loss += ((w_loss0 + w_loss1).data / 2).item()
+            s_total_loss += ((s_loss0 + s_loss1).data / 2).item()
 
         #clip loss
         if args.is_CLIP == True:
@@ -145,19 +148,15 @@ def train(dataloader,  text_encoder, text_head, image_encoder, image_head, optim
         # cross-modal projection loss
         if args.is_CMP == True: 
             class_ids = class_ids.cuda() 
-            cmp, cmpc, cmpm = cmp_loss(sent_emb, sent_code, class_ids)
+            cmp, _, __ = cmp_loss(sent_emb, sent_code, class_ids)
             total_loss += cmp
-            total_cmp_loss += cmp
+            total_cmp_loss += cmp.item()
 
         # update
         total_loss.backward()
         optimizer.step()
         optimizer_head.step()
         lr_scheduler.step()
-
-        if (step % 5000 == 0):
-            print("step:", step)
-            print(lr_scheduler.get_lr())
 
         #`clip_grad_norm` helps prevent the exploding gradient problem in RNNs / LSTMs.        
         torch.nn.utils.clip_grad_norm_(text_encoder.parameters(), args.clip_max_norm)
@@ -171,7 +170,7 @@ def train(dataloader,  text_encoder, text_head, image_encoder, image_head, optim
 
     print(' | epoch {:3d} |' .format(args.current_epoch))
     if args.is_DAMSM == True:
-        total_damsm_loss = total_damsm_loss.detach().cpu().numpy() / total_length
+        total_damsm_loss = total_damsm_loss / total_length
         s_total_loss = s_total_loss / total_length
         w_total_loss = w_total_loss / total_length
         print('s_loss {:5.4f} | w_loss {:5.4f} | DAMSM loss {:5.4f}'.format(s_total_loss, w_total_loss, total_damsm_loss))
@@ -180,117 +179,27 @@ def train(dataloader,  text_encoder, text_head, image_encoder, image_head, optim
         print("Total clip loss: {:5.4f} ".format(total_cl_loss.detach().cpu().numpy() / total_length))
 
     if args.is_CMP == True: 
-        print("Total cmp loss: {:5.4f} ".format(total_cmp_loss.detach().cpu().numpy() / total_length))
+        print("Total cmp loss: {:5.4f} ".format(total_cmp_loss / total_length))
 
 
     return total_damsm_loss + total_cl_loss + total_cmp_loss
 
 
 
-def evaluate(dataloader, text_encoder, text_head, image_encoder, image_head, args):
-    text_encoder.eval()
-    if text_head is not None: text_head.eval() 
-    image_encoder.eval()
-    image_head.eval()
-
-    s_total_loss = 0
-    w_total_loss = 0
-    total_cl_loss = 0
-
-    batch_size = args.batch_size
-    labels = prepare_labels(batch_size) 
-    loop = tqdm(total = len(dataloader))
-
-    with torch.no_grad():
-        for step, data in enumerate(dataloader, 0):
-            if args.using_BERT == True:
-                imgs, words_emb, word_vector, sent_emb, keys, class_ids = \
-                        prepare_train_data_for_Bert(data, text_encoder, text_head)
-                cap_lens = None 
-
-            if args.using_BERT == False:
-                imgs, words_emb, sent_emb, keys, class_ids, cap_lens = \
-                        prepare_train_data(data, text_encoder, text_head)
-
-            """
-            Image Encoder
-            words_features: batch_size x nef x 17 x 17
-            sent_code: batch_size x nef
-            """
-            words_features, sent_code = image_encoder(imgs)
-            words_features, sent_code = image_head(words_features, sent_code)
-
-            if args.is_DAMSM == True:
-                w_loss0, w_loss1, attn_maps = words_loss(words_features, words_emb, labels,
-                                            cap_lens, class_ids.numpy(), batch_size, args)
-
-                s_loss0, s_loss1 = sent_loss(sent_code, sent_emb, labels, class_ids.numpy(), batch_size, args)
-                w_total_loss += (w_loss0 + w_loss1).data
-                s_total_loss += (s_loss0 + s_loss1).data
-
-            #clip loss
-            if args.is_CLIP == True:
-                cl_loss = clip_loss(sent_emb, sent_code, args) 
-                total_cl_loss += cl_loss  
-
-            loop.update(1)
-
-    loop.close()
-    s_total_loss = s_total_loss / step
-    w_total_loss = w_total_loss / step
-    total_cl_loss = total_cl_loss / step
-    return s_total_loss, w_total_loss, total_cl_loss
-
-
-
-def build_models_with_prev_weight(args):
-    # building text encoder
-    text_encoder = RNN_ENCODER(args, nhidden=args.embedding_dim)
-    optimizerT = torch.optim.AdamW(text_encoder.parameters(), 
-                                lr = args.lr_lstm, 
-                                weight_decay = args.weight_decay)
-
-    lr_schedulerT = torch.optim.lr_scheduler.StepLR(optimizerT, 
-                                                    args.lr_drop, 
-                                                    gamma = args.lr_gamma)
-
-    # building image encoder
-    image_encoder = CNN_ENCODER(args)
-    para = []
-    for v in image_encoder.parameters():
-        if v.requires_grad:
-            para.append(v)
-
-    optimizerI = torch.optim.AdamW(para, lr = args.lr, 
-                                        weight_decay = args.weight_decay)
-
-    lr_schedulerI = torch.optim.lr_scheduler.StepLR(optimizerI, 
-                                        args.lr_drop, 
-                                        gamma=args.lr_gamma)
-
-    # loading checkpoints
-    print("loading checkpoint; epoch: ", args.resume_epoch)
-    start_epoch = args.resume_epoch + 1
-    text_encoder.load_state_dict(torch.load(args.resume_model_path, map_location="cpu"))
-    text_encoder = text_encoder.cuda()
-    print('Load ', args.resume_model_path)
-
-    name = args.resume_model_path.replace('text_encoder', 'image_encoder')
-    image_encoder.load_state_dict(torch.load(name, map_location="cpu"))
-    image_encoder = nn.DataParallel(image_encoder, device_ids=args.gpu_id).cuda()
-    print('Load ', name)
-
-    return (text_encoder, image_encoder, optimizerT, optimizerI, 
-            lr_schedulerT, lr_schedulerI, start_epoch)
-
-
 
 def build_models(args):
     # building image encoder
-    image_encoder = ResNet18_ArcFace_ENCODER(args)
-    image_encoder = nn.DataParallel(image_encoder, device_ids=args.gpu_id).cuda()
-    image_head = ResNet18_ArcFace_Heading(args)
-    image_head = nn.DataParallel(image_head, device_ids=args.gpu_id).cuda() 
+    if args.model_type == "arcface":
+        image_encoder = ResNet18_ArcFace_ENCODER(args)
+        image_encoder = nn.DataParallel(image_encoder, device_ids=args.gpu_id).cuda()
+        image_head = ArcFace_Heading(args)
+        image_head = nn.DataParallel(image_head, device_ids=args.gpu_id).cuda() 
+
+    elif args.model_type == "adaface":
+        image_encoder = prepare_adaface(args)
+        image_head = ArcFace_Heading(args)
+        image_head = nn.DataParallel(image_head, device_ids=args.gpu_id).cuda() 
+
 
     # building text encoder
     if args.using_BERT == True:
@@ -300,7 +209,6 @@ def build_models(args):
         text_head = nn.DataParallel(text_head, device_ids=args.gpu_id).cuda()
 
         params = [
-            #{"params": image_encoder.parameters(), "lr": args.lr_image},
             {"params": text_encoder.parameters(), "lr": args.lr_text_bert},
         ]
 
@@ -315,12 +223,11 @@ def build_models(args):
         text_head = None  
 
         params = [
-            #{"params": image_encoder.parameters(), "lr": args.lr_image},
-            {"params": text_encoder.parameters(), "lr": args.lr_text},
+            {"params": text_encoder.parameters(), "lr": args.init_lr_text},
         ]
 
         params_head = [
-            {"params": itertools.chain(text_head.parameters(), image_head.parameters()),
+            {"params": itertools.chain(image_head.parameters()),
              "lr": args.lr_head}
         ]
 
@@ -328,13 +235,10 @@ def build_models(args):
     #optimizer = torch.optim.Adam(params,  betas=(0.9, 0.999), weight_decay=args.weight_decay) 
     optimizer_head = torch.optim.Adam(params_head,  betas=(0.5, 0.999)) 
 
-    lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=2000, eta_min=1e-5)
-    #lr_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-    #        optimizer, mode="min", patience=args.patience, factor=args.factor)
-
     lr_scheduler_head = torch.optim.lr_scheduler.ReduceLROnPlateau(
             optimizer_head, mode="min", patience=args.patience, factor=args.factor)
-        
+    
+
     # load from checkpoint
     start_epoch = 1
     if args.resume_epoch!=1:
@@ -349,7 +253,7 @@ def build_models(args):
         else:
             text_head = None 
 
-        
+        """
         optimizer.load_state_dict(state_dict['optimizer'])
         optimizer_head.load_state_dict(state_dict['optimizer_head'])
 
@@ -360,15 +264,16 @@ def build_models(args):
         image_encoder.load_state_dict(state_dict['model'])
         image_head.load_state_dict(state_dict["head"])
         print('Load ', name)
+        """
 
-    return (text_encoder, text_head, image_encoder, image_head, optimizer, 
-            lr_scheduler, optimizer_head, lr_scheduler_head, start_epoch)
+    return (text_encoder, text_head, image_encoder, image_head, optimizer, optimizer_head, lr_scheduler_head, start_epoch)
 
 
 
 def prepare_labels(batch_size):
     match_labels = Variable(torch.LongTensor(range(batch_size)))
     return match_labels.cuda()
+
 
 
 def main(args):
@@ -389,15 +294,10 @@ def main(args):
     del train_ds, valid_ds
     
     # Build model
-    if args.prev_weight == False:
-        text_encoder, text_head, image_encoder, image_head, optimizer, \
-                            lr_scheduler, optimizer_head, lr_scheduler_head, start_epoch = build_models(args)
+    text_encoder, text_head, image_encoder, image_head, optimizer, \
+            optimizer_head, lr_scheduler_head, start_epoch = build_models(args)
     
-    elif args.prev_weight == True:
-        text_encoder, image_encoder, optimizerT, optimizerI, \
-            lr_schedulerT, lr_schedulerI, start_epoch= build_models_with_prev_weight(args)
 
-   
     if args.is_CMP == True: 
         # initialize losses
         cmp_loss = CMPLoss(is_CMPM=True, is_CMPC=True, num_classes=24000, feature_dim=args.aux_feat_dim_per_granularity)
@@ -409,23 +309,18 @@ def main(args):
         args.current_epoch = epoch
 
         print('Reset scheduler')
-        lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=2000, eta_min=1e-5)
+        lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.r_step, eta_min=args.min_lr_text)
         total_loss = train(train_dl, text_encoder, text_head, image_encoder, image_head, optimizer, lr_scheduler,
                 optimizer_head, cmp_loss, args)
 
         lr_scheduler_head.step(total_loss)
-        if ((args.do_test == True) and (epoch % args.test_interval == 0)):
-            print("Let's evaluate the model")
-
-            s_loss, w_loss, total_clip_loss = evaluate(valid_dl, text_encoder, text_head, image_encoder, image_head, args)
-            print('| end epoch {:3d} | valid loss {:5.4f} {:5.4f} {:5.4f}'.format(epoch, s_loss, w_loss, total_clip_loss))
 
         if (epoch % args.save_interval == 0 or epoch == args.max_epoch):
             print("saving image and text encoder\n")
             save_encoders(text_encoder, text_head, image_encoder, image_head, 
                             optimizer, optimizer_head, args)
-
         
+
 if __name__ == "__main__":
     args = merge_args_yaml(parse_args())
 

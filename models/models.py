@@ -10,6 +10,13 @@ from transformers import BertModel
 import torch.nn.functional as F
 from torchsummary import summary
 import numpy as np 
+import math 
+
+
+def l2_norm(input, axis=1):
+    norm = torch.norm(input,2,axis,True)
+    output = torch.div(input, norm)
+    return output
 
 
 def get_CLS_embedding(layer):
@@ -147,7 +154,7 @@ class ResNetFace(nn.Module):
         x = self.fc5(x)
         x = self.bn5(x)
 
-        return x, word_feat 
+        return word_feat, x  
 
 
 def resnet_face18(use_se=True, **kwargs):
@@ -237,8 +244,8 @@ class BERTHeading(nn.Module):
         super(BERTHeading, self).__init__()
         self.feat_dim = args.aux_feat_dim_per_granularity
         self.sentence_feat = ProjectionHead(embedding_dim=768, projection_dim=self.feat_dim)
-        self.word_feat = nn.Linear(768, self.feat_dim)
         self.bwm = Bert_Word_Mapping(self.feat_dim)
+        self.word_feat = nn.Linear(768, self.feat_dim)
 
     def get_each_word_feature(self, x):
         bs = x[0].size(0)
@@ -264,7 +271,7 @@ class BERTHeading(nn.Module):
         return output 
         
     def forward(self, words_emb, sent_emb):
-        sent_emb = self.sentence_feat(sent_emb) #batch_size x 256
+        sent_emb = self.sentence_feat(sent_emb) #batch_size x 64
         #words_emb = self.word_feat(words_emb) #batch_size x 20 x 256
         
         x = self.bwm(words_emb)
@@ -338,7 +345,8 @@ class RNN_ENCODER(nn.Module):
         # input: torch.LongTensor of size batch x n_steps
         # --> emb: batch x n_steps x ninput
         emb = self.drop(self.encoder(captions))
-        #
+
+
         # Returns: a PackedSequence object
         cap_lens = cap_lens.data.tolist()
         emb = pack_padded_sequence(emb, cap_lens, batch_first=True)
@@ -361,7 +369,7 @@ class RNN_ENCODER(nn.Module):
             sent_emb = hidden.transpose(0, 1).contiguous()
         sent_emb = sent_emb.view(-1, self.nhidden * self.num_directions)
         return words_emb, sent_emb
-
+        
 
 
 class ResNet18_ArcFace_ENCODER(nn.Module):
@@ -421,9 +429,9 @@ class ResNet18_ArcFace_ENCODER(nn.Module):
 
 
 
-class ResNet18_ArcFace_Heading(nn.Module):
+class ArcFace_Heading(nn.Module):
     def __init__(self, args):
-        super(ResNet18_ArcFace_Heading, self).__init__()
+        super(ArcFace_Heading, self).__init__()
         self.project_global = ProjectionHead(embedding_dim=512, projection_dim=args.aux_feat_dim_per_granularity)
         self.project_local =  ProjectionHead(embedding_dim=256, projection_dim=args.aux_feat_dim_per_granularity)
         
@@ -439,215 +447,87 @@ class ResNet18_ArcFace_Heading(nn.Module):
 
 
 
-class CNN_ENCODER(nn.Module):
-    def __init__(self, args):
-        super(CNN_ENCODER, self).__init__()
-        if args.using_BERT == True: self.nef = 768
-        elif args.using_BERT == False:  self.nef = 256 
+class AdaFace(nn.Module):
+    def __init__(self,
+                 embedding_size,
+                 classnum,
+                 m=0.4,
+                 h=0.333,
+                 s=64.,
+                 t_alpha=1.0,
+                 ):
+        super(AdaFace, self).__init__()
+        self.classnum = classnum
+        self.kernel = torch.nn.Parameter(torch.Tensor(embedding_size, classnum))
 
-        model = models.inception_v3()
-        url = 'https://download.pytorch.org/models/inception_v3_google-1a9a5a14.pth'
-        model.load_state_dict(model_zoo.load_url(url))
+        # initial kernel
+        self.kernel.data.uniform_(-1, 1).renorm_(2,1,1e-5).mul_(1e5)
+        self.m = m 
+        self.eps = 1e-3
+        self.h = h
+        self.s = s
 
-        for param in model.parameters():
-            param.requires_grad = False
-        print('Load pretrained model from ', url)
+        # ema prep
+        self.t_alpha = t_alpha
+        self.register_buffer('t', torch.zeros(1))
+        self.register_buffer('batch_mean', torch.ones(1)*(20))
+        self.register_buffer('batch_std', torch.ones(1)*100)
 
-        self.define_module(model)
-        self.init_trainable_weights()
-
-    def define_module(self, model):
-        self.Conv2d_1a_3x3 = model.Conv2d_1a_3x3
-        self.Conv2d_2a_3x3 = model.Conv2d_2a_3x3
-        self.Conv2d_2b_3x3 = model.Conv2d_2b_3x3
-        self.Conv2d_3b_1x1 = model.Conv2d_3b_1x1
-        self.Conv2d_4a_3x3 = model.Conv2d_4a_3x3
-        self.Mixed_5b = model.Mixed_5b
-        self.Mixed_5c = model.Mixed_5c
-        self.Mixed_5d = model.Mixed_5d
-        self.Mixed_6a = model.Mixed_6a
-        self.Mixed_6b = model.Mixed_6b
-        self.Mixed_6c = model.Mixed_6c
-        self.Mixed_6d = model.Mixed_6d
-        self.Mixed_6e = model.Mixed_6e
-        self.Mixed_7a = model.Mixed_7a
-        self.Mixed_7b = model.Mixed_7b
-        self.Mixed_7c = model.Mixed_7c
-
-        self.emb_features = conv1x1(768, self.nef)
-        self.emb_cnn_code = nn.Linear(2048, self.nef)
-
-    def init_trainable_weights(self):
-        initrange = 0.1
-        self.emb_features.weight.data.uniform_(-initrange, initrange)
-        self.emb_cnn_code.weight.data.uniform_(-initrange, initrange)
-
-    def forward(self, x):
-        features = None
-        # --> fixed-size input: batch x 3 x 299 x 299
-        x = nn.functional.interpolate(x,size=(299, 299), mode='bilinear', align_corners=False)
-        # 299 x 299 x 3
-        x = self.Conv2d_1a_3x3(x)
-        # 149 x 149 x 32
-        x = self.Conv2d_2a_3x3(x)
-        # 147 x 147 x 32
-        x = self.Conv2d_2b_3x3(x)
-        # 147 x 147 x 64
-        x = F.max_pool2d(x, kernel_size=3, stride=2)
-        # 73 x 73 x 64
-        x = self.Conv2d_3b_1x1(x)
-        # 73 x 73 x 80
-        x = self.Conv2d_4a_3x3(x)
-        # 71 x 71 x 192
-
-        x = F.max_pool2d(x, kernel_size=3, stride=2)
-        # 35 x 35 x 192
-        x = self.Mixed_5b(x)
-        # 35 x 35 x 256
-        x = self.Mixed_5c(x)
-        # 35 x 35 x 288
-        x = self.Mixed_5d(x)
-        # 35 x 35 x 288
-
-        x = self.Mixed_6a(x)
-        # 17 x 17 x 768
-        x = self.Mixed_6b(x)
-        # 17 x 17 x 768
-        x = self.Mixed_6c(x)
-        # 17 x 17 x 768
-        x = self.Mixed_6d(x)
-        # 17 x 17 x 768
-        x = self.Mixed_6e(x)
-        # 17 x 17 x 768
-
-        # image region features
-        features = x
-        # 17 x 17 x 768
-
-        x = self.Mixed_7a(x)
-        # 8 x 8 x 1280
-        x = self.Mixed_7b(x)
-        # 8 x 8 x 2048
-        x = self.Mixed_7c(x)
-        # 8 x 8 x 2048
-        x = F.avg_pool2d(x, kernel_size=8)
-        # 1 x 1 x 2048
-        # x = F.dropout(x, training=self.training)
-        # 1 x 1 x 2048
-        x = x.view(x.size(0), -1)
-        # 2048
-
-        # global image features
-        cnn_code = self.emb_cnn_code(x)
-        # 512
-        if features is not None:
-            features = self.emb_features(features)
-        return features, cnn_code
+        print('\n\AdaFace with the following property')
+        print('self.m', self.m)
+        print('self.h', self.h)
+        print('self.s', self.s)
+        print('self.t_alpha', self.t_alpha)
 
 
-"""
-class MANIGAN_Bert_Encoder():
-    def __init__(self, args):
-        super(MANIGAN_Bert_Encoder, self).__init__()
-        self.args = args 
-        self.model = BertModel.from_pretrained(self.args.bert_config, 
-                                                output_hidden_states=True)
-        for p in self.model.parameters():
-            p.requires_grad = True
-        self.model = nn.DataParallel(self.model, device_ids=args.gpu_id).cuda()
+    def forward(self, embbedings, norms, label):
 
-    def get_word_idx(self, sent: str, word: str):
-        return sent.split(" ").index(word)
+        kernel_norm = l2_norm(self.kernel,axis=0)
+        cosine = torch.mm(embbedings,kernel_norm)
+        cosine = cosine.clamp(-1+self.eps, 1-self.eps) # for stability
+        del kernel_norm
 
-    def get_hidden_states(self, encoded, token_ids_word, model, layers):
+        safe_norms = torch.clip(norms, min=0.001, max=100) # for stability
+        safe_norms = safe_norms.clone().detach()
+
+        # update batchmean batchstd
         with torch.no_grad():
-            output = model(**encoded)
+            mean = safe_norms.mean().detach()
+            std = safe_norms.std().detach()
+            self.batch_mean = mean * self.t_alpha + (1 - self.t_alpha) * self.batch_mean
+            self.batch_std =  std * self.t_alpha + (1 - self.t_alpha) * self.batch_std
 
-            # Get all hidden states
-            states = output.hidden_states
+        margin_scaler = (safe_norms - self.batch_mean) / (self.batch_std+self.eps) # 66% between -1, 1
+        margin_scaler = margin_scaler * self.h # 68% between -0.333 ,0.333 when h:0.333
+        margin_scaler = torch.clip(margin_scaler, -1, 1)
+        # ex: m=0.5, h:0.333
+        # range
+        #       (66% range)
+        #   -1 -0.333  0.333   1  (margin_scaler)
+        # -0.5 -0.166  0.166 0.5  (m * margin_scaler)
 
-            # Stack and sum all requested layers
-            output = torch.stack([states[i] for i in layers]).sum(0).squeeze()
+        # g_angular
+        m_arc = torch.zeros(label.size()[0], cosine.size()[1], device=cosine.device)
+        m_arc.scatter_(1, label.reshape(-1, 1), 1.0)
+        g_angular = self.m * margin_scaler * -1
+        m_arc = m_arc * g_angular
+        theta = cosine.acos()
+        theta_m = torch.clip(theta + m_arc, min=self.eps, max=math.pi-self.eps)
+        cosine = theta_m.cos()
 
-            # Only select the tokens that constitute the requested word
-            word_tokens_output = output[token_ids_word]
-            return word_tokens_output.mean(dim=0)
+        # g_additive
+        m_cos = torch.zeros(label.size()[0], cosine.size()[1], device=cosine.device)
+        m_cos.scatter_(1, label.reshape(-1, 1), 1.0)
+        g_add = self.m + (self.m * margin_scaler)
+        m_cos = m_cos * g_add
+        cosine = cosine - m_cos
 
+        # scale
+        scaled_cosine_m = cosine * self.s
+        return scaled_cosine_m
 
-    def get_word_vector(self, sent, idx, tokenizer, model, layers):
-        encoded = tokenizer.encode_plus(sent, add_special_tokens=True,
-                            max_length = self.args.bert_words_num,
-                            return_token_type_ids=False,
-                            padding='max_length', 
-                            return_tensors="pt")
-
-        # get all token idxs that belong to the word of interest
-        token_ids_word = np.where(np.array(encoded.word_ids()) == idx)
-        return self.get_hidden_states(encoded, token_ids_word, model, layers)
-
-
-    def mean_pooling(self, model_output, attention_mask):
-        token_embeddings = model_output[0]  # First element of model_output contains all token embeddings
-        input_mask_expanded = attention_mask.unsqueeze(-1).expand(token_embeddings.size()).float()
-        input_mask_expanded =input_mask_expanded.cuda()
-        return torch.sum(token_embeddings * input_mask_expanded, 1) / torch.clamp(input_mask_expanded.sum(1), min=1e-9)
-
-
-    def get_embeddings(self, captions, layers=None ):
-        # Use last four layers by default
-        layers = [-4, -3, -2, -1] if layers is None else layers
-        tokenizer = BertTokenizerFast.from_pretrained(self.args.bert_config)
-        
-
-        # dense_model = models.Dense(in_features= 768, out_features=256, activation_function= nn.ReLU())
-        # model = SentenceTransformer(modules=[word_embedding_model, dense_model])
-
-        with torch.no_grad():
-            batch_word_embeddings = []
-            batch_sentence_embeddings = []
-
-            for sent in captions:
-                encoded_input = tokenizer(sent, padding='max_length', max_length = self.args.bert_words_num, truncation=True, return_tensors='pt')
-                model_output = self.model(**encoded_input)
-                sent_embeddings = self.mean_pooling(model_output, encoded_input['attention_mask'])
-                word_embeddings = []
-
-                max_limit = self.args.bert_words_num - 1
-                if len(sent.split()) >= max_limit:
-                    for word in sent.split()[:max_limit]:
-                        idx = self.get_word_idx(sent, word)
-                        word_embedding = self.get_word_vector(sent, idx, tokenizer, self.model, layers)
-                        word_embeddings.append(word_embedding)
-                else:
-                    for word in sent.split():
-                        idx = self.get_word_idx(sent, word)
-                        word_embedding = self.get_word_vector(sent, idx, tokenizer, self.model, layers)
-                        word_embeddings.append(word_embedding)
-
-                    word_embeddings += [word_embedding] * (max_limit - len(word_embeddings)) # fill the rest with the <end> token
-
-                word_embeddings = torch.stack([we for we in word_embeddings])
-                batch_word_embeddings.append(word_embeddings)
-                batch_sentence_embeddings.append(sent_embeddings)
-
-        batch_word_embeddings = pad_sequence(batch_word_embeddings, batch_first=True)
-        #batch_word_embeddings = batch_word_embeddings.transpose(1, 2)
-
-        batch_sentence_embeddings = torch.stack(batch_sentence_embeddings)
-        batch_sentence_embeddings = batch_sentence_embeddings.transpose(0, 1).contiguous()
-        batch_sentence_embeddings = batch_sentence_embeddings.view(-1, 768)
-
-        return batch_word_embeddings, batch_sentence_embeddings
-"""
 
 
 if __name__ == "__main__":
     from easydict import EasyDict as edict
     args = edict()
-    args.aux_feat_dim_per_granularity = 64 
-
-    r = ResNet18_ArcFace_ENCODER(args)
-    img = torch.randn((16, 1, 128, 128))
-    features, x = r(img)
-    print(x.shape)
-    print(features.shape)
