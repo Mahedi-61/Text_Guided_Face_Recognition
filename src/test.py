@@ -15,13 +15,13 @@ from utils.modules import test
 
 def parse_args():
     # Training settings
+    print("loading celeba.yml")
     parser = argparse.ArgumentParser(description='CGFG')
     parser.add_argument('--cfg', dest='cfg_file', type=str, default='./cfg/celeba.yml',
                         help='optional config file')
     parser.add_argument('--train', type=bool, default=False, help='if train model')
     args = parser.parse_args()
     return args
-
 
 
 def main(args):
@@ -36,11 +36,12 @@ def main(args):
     elif args.model_type == "adaface":
             model = prepare_adaface(args)
 
+    
     # load from checkpoint
     net = prepare_fusion_net(args)
-
-    for i in [20]:
-        args.text_encoder_path = "./checkpoints/celeba/Fusion/final_cross_att/arcface_text_encoder_bert_cross_attention_%d.pth" % i
+    
+    for i in [80]:
+        args.text_encoder_path = "./checkpoints/celeba/Pretrain/BiLSTM/adaface/best_adaface_text_encoder_bert_%d.pth" % i
         text_encoder, text_head = prepare_text_encoder(args, test=True)
 
         if args.fusion_type != "concat":
@@ -52,6 +53,8 @@ def main(args):
         print("Start Testing")
         args.is_roc = True   
         test(test_dl, model, net, text_encoder, text_head, args)
+    
+
 
 
 if __name__ == "__main__":

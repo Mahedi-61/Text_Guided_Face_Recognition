@@ -5,25 +5,22 @@ import os
 import numpy.random as random
 from utils.dataset_utils import * 
 
+
 ################################################################
 #                    Test Dataset
 ################################################################
 class TextImgTestDataset(data.Dataset):
     def __init__(self, filenames, captions, att_masks, ixtoword=None, wordtoix=None, 
-                    n_words=None, transform=None, args=None):
-        self.split= "test"
+                    n_words=None, transform=None, split="", args=None):
+        self.split= split
         self.transform = transform
         self.data_dir = args.data_dir
         self.dataset_name = args.dataset_name
         self.embeddings_num = args.captions_per_image
         self.model_type = args.model_type 
+        self.is_ident = args.is_ident 
         self.filenames = filenames
         self.captions = captions 
-        
-        if self.data_dir.find('birds') != -1:
-            self.bbox = load_bbox(self.data_dir, self.split)
-        else:
-            self.bbox = None
 
         self.using_BERT = args.using_BERT 
         if args.using_BERT == True: 
@@ -37,10 +34,14 @@ class TextImgTestDataset(data.Dataset):
             self.n_words = n_words
 
         self.class_id = load_class_id(os.path.join(self.data_dir, self.split))
-        self.test_pair_list = args.test_pair_list
-        self.config = args.CONFIG_NAME
+
+        if split == "test":
+            self.test_pair_list = args.test_pair_list
+        elif split == "valid":
+             self.test_pair_list = args.valid_pair_list
+
         self.imgs_pair, self.pair_label = self.get_test_list()
-        
+
 
     def get_test_list(self):
         with open(self.test_pair_list, 'r') as fd:
@@ -81,27 +82,19 @@ class TextImgTestDataset(data.Dataset):
     def __getitem__(self, index):
         imgs = self.imgs_pair[index]
         pair_label = self.pair_label[index]
+        data_dir = os.path.join(self.data_dir, "images")
 
-        if self.dataset_name == "birds":
-            data_dir = os.path.join(self.data_dir, "CUB_200_2011")
-        elif self.dataset_name == "celeba":
-            data_dir = os.path.join(self.data_dir, "celeba")
+        img1_name = os.path.join(imgs[0].split("_")[0], imgs[0])
+        img2_name = os.path.join(imgs[1].split("_")[0], imgs[1])
 
-        img1_name = '%s/test_images/%s' % (data_dir, imgs[0])
-        img2_name = '%s/test_images/%s' % (data_dir, imgs[1])
+        img1_path = os.path.join(data_dir, self.split, img1_name)
+        img2_path = os.path.join(data_dir, self.split, img2_name)
 
-        key1 = imgs[0][:-4]
-        key2 = imgs[1][:-4]
+        key1 = img1_name[:-4]
+        key2 = img2_name[:-4]
 
-        if self.dataset_name == "birds":
-            bbox1 = self.bbox[key1]
-            bbox2 = self.bbox[key2]
-        else:
-            bbox1 = None
-            bbox2 = None 
-
-        img1 = get_imgs(img1_name, self.config, bbox1, self.transform, self.model_type)
-        img2 = get_imgs(img2_name, self.config, bbox2, self.transform, self.model_type)
+        img1 = get_imgs(img1_path, self.split, self.transform, self.model_type)
+        img2 = get_imgs(img2_path, self.split, self.transform, self.model_type)
 
         real_index1 = self.filenames.index(key1)
         real_index2 = self.filenames.index(key2)
@@ -125,6 +118,7 @@ class TextImgTestDataset(data.Dataset):
             cap2, cap_len2 = self.get_caption(new_sent_ix2)
             return img1, img2, cap1, cap2, cap_len1, cap_len2, pair_label
 
+        if (index % 50000 == 0): print(index) 
 
     def __len__(self):
         return len (self.imgs_pair)

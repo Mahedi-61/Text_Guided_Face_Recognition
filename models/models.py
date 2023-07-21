@@ -91,77 +91,6 @@ class IRBlock(nn.Module):
         return out
 
 
-class ResNetFace(nn.Module):
-    def __init__(self, block, layers, use_se=True):
-        self.inplanes = 64
-        self.use_se = use_se
-        super(ResNetFace, self).__init__()
-        
-        self.conv1 = nn.Conv2d(1, 64, kernel_size=3, padding=1, bias=False)
-        self.bn1 = nn.BatchNorm2d(64)
-        self.prelu = nn.PReLU()
-        self.maxpool = nn.MaxPool2d(kernel_size=2, stride=2)
-        self.layer1 = self._make_layer(block, 64, layers[0])
-        self.layer2 = self._make_layer(block, 128, layers[1], stride=2)
-        self.layer3 = self._make_layer(block, 256, layers[2], stride=2)
-        self.layer4 = self._make_layer(block, 512, layers[3], stride=2)
-        self.bn4 = nn.BatchNorm2d(512)
-        self.dropout = nn.Dropout()
-        self.fc5 = nn.Linear(512 * 8 * 8, 512)
-        self.bn5 = nn.BatchNorm1d(512)
-
-        for m in self.modules():
-            if isinstance(m, nn.Conv2d):
-                nn.init.xavier_normal_(m.weight)
-            elif isinstance(m, nn.BatchNorm2d) or isinstance(m, nn.BatchNorm1d):
-                nn.init.constant_(m.weight, 1)
-                nn.init.constant_(m.bias, 0)
-            elif isinstance(m, nn.Linear):
-                nn.init.xavier_normal_(m.weight)
-                nn.init.constant_(m.bias, 0)
-
-    def _make_layer(self, block, planes, blocks, stride=1):
-        downsample = None
-        if stride != 1 or self.inplanes != planes * block.expansion:
-            downsample = nn.Sequential(
-                nn.Conv2d(self.inplanes, planes * block.expansion,
-                          kernel_size=1, stride=stride, bias=False),
-                nn.BatchNorm2d(planes * block.expansion),
-            )
-        layers = []
-        layers.append(block(self.inplanes, planes, stride, downsample, use_se=self.use_se))
-        self.inplanes = planes
-        for i in range(1, blocks):
-            layers.append(block(self.inplanes, planes, use_se=self.use_se))
-
-        return nn.Sequential(*layers)
-
-    def forward(self, x):
-        x = self.conv1(x)
-        x = self.bn1(x)
-        x = self.prelu(x)
-        x = self.maxpool(x)
-
-        x = self.layer1(x)
-        x = self.layer2(x)
-        x = self.layer3(x)
-        word_feat = x 
-
-        x = self.layer4(x)
-        x = self.bn4(x)
-        x = self.dropout(x)
-        x = x.view(x.size(0), -1)
-        x = self.fc5(x)
-        x = self.bn5(x)
-
-        return word_feat, x  
-
-
-def resnet_face18(use_se=True, **kwargs):
-    model = ResNetFace(IRBlock, [2, 2, 2, 2], use_se=use_se, **kwargs)
-    return model
-
-
 
 ############### Encoder-Decoder ###################
 class ProjectionHead(nn.Module):
@@ -294,7 +223,7 @@ class RNN_ENCODER(nn.Module):
         self.drop_prob = drop_prob  # probability of an element to be zeroed
         self.nlayers = nlayers  # number of recurrent layers
         self.bidirectional = bidirectional
-        self.rnn_type = args.rnn_type
+        self.en_type = args.en_type
         if bidirectional:
             self.num_directions = 2
         else:
@@ -308,14 +237,14 @@ class RNN_ENCODER(nn.Module):
     def define_module(self):
         self.encoder = nn.Embedding(self.ntoken, self.ninput)
         self.drop = nn.Dropout(self.drop_prob)
-        if self.rnn_type == 'LSTM':
+        if self.en_type == 'LSTM':
             # dropout: If non-zero, introduces a dropout layer on
             # the outputs of each RNN layer except the last layer
             self.rnn = nn.LSTM(self.ninput, self.nhidden,
                                self.nlayers, batch_first=True,
                                dropout=self.drop_prob,
                                bidirectional=self.bidirectional)
-        elif self.rnn_type == 'GRU':
+        elif self.en_type == 'GRU':
             self.rnn = nn.GRU(self.ninput, self.nhidden,
                               self.nlayers, batch_first=True,
                               dropout=self.drop_prob,
@@ -332,7 +261,7 @@ class RNN_ENCODER(nn.Module):
 
     def init_hidden(self, bsz):
         weight = next(self.parameters()).data
-        if self.rnn_type == 'LSTM':
+        if self.en_type == 'LSTM':
             return (Variable(weight.new(self.nlayers * self.num_directions,
                                         bsz, self.nhidden).zero_()),
                     Variable(weight.new(self.nlayers * self.num_directions,
@@ -363,7 +292,7 @@ class RNN_ENCODER(nn.Module):
         # --> batch x hidden_size*num_directions x seq_len
         words_emb = output.transpose(1, 2)
         # --> batch x num_directions*hidden_size
-        if self.rnn_type == 'LSTM':
+        if self.en_type == 'LSTM':
             sent_emb = hidden[0].transpose(0, 1).contiguous()
         else:
             sent_emb = hidden.transpose(0, 1).contiguous()
@@ -372,70 +301,13 @@ class RNN_ENCODER(nn.Module):
         
 
 
-class ResNet18_ArcFace_ENCODER(nn.Module):
-    def __init__(self, args):
-        super(ResNet18_ArcFace_ENCODER, self).__init__()
-
-        model_path = "weights/celeba/FE/resnet18_celeba_110.pth"
-        model = ResNetFace(IRBlock, [2, 2, 2, 2], use_se= False)
-        
-        weights = torch.load(model_path)
-        state_dict = {
-                key[7:]: value
-                for key, value in weights.items()
-            }
-        model.load_state_dict(state_dict)
-        print('Load pretrained ResNet18 ArcFace model from ', model_path)
-        for p in model.parameters():
-            p.requires_grad = False
-
-        self.define_module(model)
-        print("ArcFace Encoder trainable ", False)
-
-    def define_module(self, model):
-        self.conv1 = model.conv1
-        self.bn1 = model.bn1
-        self.prelu = model.prelu
-        self.maxpool = model.maxpool
-        self.layer1 = model.layer1
-        self.layer2 = model.layer2
-        self.layer3 = model.layer3
-        self.layer4 = model.layer4
-        self.bn4 = model.bn4
-        self.dropout = model.dropout
-        self.fc5 = model.fc5
-        self.bn5 = model.bn5
-        del model 
-        
-    def forward(self, x):
-        x = self.conv1(x)
-        x = self.bn1(x)
-        x = self.prelu(x)
-        x = self.maxpool(x)
-
-        x = self.layer1(x)
-        x = self.layer2(x)
-        x = self.layer3(x)
-        features = x #.permute(0, 2, 3, 1)
-
-        x = self.layer4(x)
-        x = self.bn4(x)
-        x = self.dropout(x)
-        x = x.view(x.size(0), -1)
-        x = self.fc5(x)
-        x = self.bn5(x)
-
-        return features, x
-
-
-
 class ArcFace_Heading(nn.Module):
     def __init__(self, args):
         super(ArcFace_Heading, self).__init__()
         self.project_global = ProjectionHead(embedding_dim=512, projection_dim=args.aux_feat_dim_per_granularity)
         self.project_local =  ProjectionHead(embedding_dim=256, projection_dim=args.aux_feat_dim_per_granularity)
         
-    def forward(self, local_image, global_image):
+    def forward(self, global_image, local_image):
         local_image = local_image.permute((0, 2, 3, 1))
         local_image = self.project_local(local_image) #batch_size x 16 x 16 x 128
         local_image = F.normalize(local_image, p=2, dim=-1)
@@ -443,7 +315,7 @@ class ArcFace_Heading(nn.Module):
 
         global_image = self.project_global(global_image) #batch_size x 128
         global_image = F.normalize(global_image, p=2, dim=-1)
-        return local_image, global_image 
+        return  global_image, local_image, 
 
 
 

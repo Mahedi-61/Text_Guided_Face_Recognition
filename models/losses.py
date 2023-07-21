@@ -82,7 +82,6 @@ def words_loss(img_features, words_emb, labels, cap_lens, class_ids, batch_size,
         elif args.using_BERT: words_num = args.bert_words_num - 1 #removing [cls] token 
 
         word = words_emb[i, :, :words_num].unsqueeze(0).contiguous()
-
         word = word.repeat(batch_size, 1, 1)
         context = img_features
 
@@ -260,3 +259,18 @@ class CMPLoss(nn.Module):
         
         loss = cmpc_loss + cmpm_loss
         return loss, cmpc_loss, cmpm_loss
+    
+
+class FocalLoss(nn.Module):
+
+    def __init__(self, gamma=0, eps=1e-7):
+        super(FocalLoss, self).__init__()
+        self.gamma = gamma
+        self.eps = eps
+        self.ce = torch.nn.CrossEntropyLoss()
+
+    def forward(self, input, target):
+        logp = self.ce(input, target)
+        p = torch.exp(-logp)
+        loss = (1 - p) ** self.gamma * logp
+        return loss.mean()

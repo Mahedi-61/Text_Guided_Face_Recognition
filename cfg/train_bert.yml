@@ -1,0 +1,64 @@
+#### configuration and directory
+CONFIG_NAME: Train 
+dataset_name: face2text
+data_dir: ./data/face2text
+checkpoints_path: ./checkpoints
+
+weights_adaface: "./weights/pretrained/adaface_ir18_webface4m.ckpt"
+weights_arcface: "./weights/pretrained/arcface_ir18_ms1mv3.pth"
+weights_magface: "./weights/pretrained/magface_iresnet18_casia_dp.pth"
+
+# machine setup
+num_workers: 8 
+gpu_id: [0] #1
+manual_seed: 100
+CUDA: True
+
+# losses
+is_DAMSM: True  
+is_CLIP: True    
+is_CMP: True       
+lambda_cl: 2.0
+
+
+# model arch 
+aux_feat_dim_per_granularity: 64 
+img_size: 112 
+model_type: arcface     
+ch_size: 3           
+num_classes: 4500
+
+init_lr_bert:  0.00007  #(7e-5) initial learnig rate 
+min_lr_bert: 0.00001 #(1e-5 for BERT)
+r_step: 2000
+lr_head: 0.002
+weight_decay: 0.01 #0.01 for BERT
+clip_max_norm: 1.0 
+
+
+#trainng settings
+batch_size: 32 #16 for first step *****************CHANGE
+max_epoch: 20 
+test_interval: 1
+save_interval: 1
+patience: 1 
+factor: 0.8
+temperature: 1.0
+
+# flags
+do_test: False   
+
+# encoder
+TRAIN:
+    FLAG: True
+    SMOOTH:
+        GAMMA1: 4.0  
+        GAMMA2: 5.0
+        GAMMA3: 10.0
+
+using_BERT: True        
+en_type: "BERT"   
+bert_words_num: 21
+embedding_dim: 256
+captions_per_image: 4 #10
+bert_config:  bert-base-uncased #distilbert-base-uncased 

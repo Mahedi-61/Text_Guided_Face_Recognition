@@ -19,17 +19,7 @@ class TextImgTrainDataset(data.Dataset):
         self.dataset_name = args.dataset_name
         self.using_BERT = args.using_BERT
         self.model_type = args.model_type
-        
-        if split == "train":
-            self.split = split 
-
-        elif split == "valid":
-            self.split = "test"
-
-        if self.data_dir.find('birds') != -1:
-            self.bbox = load_bbox(self.data_dir, self.split)
-        else:
-            self.bbox = None
+        self.split = split 
 
         if args.using_BERT == True: 
             self.filenames = filenames
@@ -47,7 +37,6 @@ class TextImgTrainDataset(data.Dataset):
 
         split_dir = os.path.join(self.data_dir, self.split)
         self.class_id = load_class_id(split_dir)
-        self.config = args.CONFIG_NAME
 
 
     def get_caption(self, sent_ix):
@@ -77,30 +66,13 @@ class TextImgTrainDataset(data.Dataset):
     def __getitem__(self, index):
         key = self.filenames[index]
         cls_id = self.class_id[index]
-        data_dir = self.data_dir
-        
-        if self.bbox is not None:
-            bbox = self.bbox[key]
-        else:
-            bbox = None
+        data_dir = os.path.join(self.data_dir, "images")
 
-        if self.dataset_name == "birds":
-            data_dir = os.path.join(self.data_dir, "CUB_200_2011")
+        if self.dataset_name == "celeba" or self.dataset_name == "face2text":
             img_extension = ".jpg"
 
-        elif self.config == "Fusion":
-            data_dir = os.path.join(self.data_dir, "celeba")
-            img_extension = ".png"
-            img_folder = "train_images"
-
-        if self.config == "Pretrain":
-            data_dir = os.path.join(self.data_dir, "celeba")
-            if self.split == "train": img_folder = "train_images_DAMSM"
-            elif self.split == "test": img_folder = "test_images_DAMSM"
-            img_extension = ".png"
-
-        img_name = "%s/%s/%s%s" % (data_dir, img_folder, key, img_extension)
-        imgs = get_imgs(img_name, self.config, bbox, self.transform, self.model_type)
+        img_name = os.path.join(data_dir, self.split, key + img_extension)
+        imgs = get_imgs(img_name, self.split, self.transform, self.model_type)
 
         # random select a sentence
         sent_ix = random.randint(0, self.embeddings_num)

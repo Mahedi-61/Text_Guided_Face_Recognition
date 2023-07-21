@@ -1,0 +1,71 @@
+CONFIG_NAME: Fusion
+dataset_name: face2text
+data_dir: ./data/face2text
+test_pair_list: ./data/face2text/images/test_199_sub.txt 
+valid_pair_list: ./data/face2text/images/valid_199_sub.txt 
+
+weights_adaface: "./weights/pretrained/adaface_ir18_webface4m.ckpt"
+weights_arcface: "./weights/pretrained/arcface_ir18_ms1mv3.pth"
+weights_magface: "./weights/pretrained/magface_iresnet18_casia_dp.pth"
+
+checkpoints_path: ./checkpoints
+load_model_path: ./weights/pretrained/resnet18_celeba_110.pth
+text_encoder_path: "./checkpoints/face2text/Train/BERT_arcface/BERT_text_encoder_8.pth"
+image_encoder_path: "./checkpoints/face2text/Train/BERT_arcface/arcface_image_encoder_8.pth"
+resume_epoch: 1
+
+# machine setup 
+num_workers: 6 
+gpu_id: [0]
+manual_seed: 100
+cuda: True
+
+# model arch
+img_size: 112
+model_type: arcface
+ch_size: 3
+
+# encoder settings
+en_type: BERT #LSTM, GRU, BERT 
+using_BERT: True         
+bert_words_num: 21
+bert_config:  bert-base-uncased #distilbert-base-uncased  
+captions_per_image: 4 #10
+
+backbone: resnet18
+classify: softmax
+num_classes: 4500 
+metric: arc_margin 
+easy_margin: False
+loss: focal_loss 
+optimizer: sgd 
+use_se: False
+
+# training settings 
+lr_image_train: 0.01   #0.01 for ArcFace
+lr_step: 4
+gamma: 0.5  
+weight_decay: 0.0005
+lr_head: 0.001
+patience: 2 
+factor: 0.70
+temperature: 1.0
+
+max_epoch: 64
+batch_size: 32 
+test_interval: 2
+save_interval: 1
+trainable: False
+
+# fusion arch
+fusion_type: linear #cross_attention, linear, paragraph_attention, concat
+fusion_final_dim: 768  
+aux_feat_dim_per_granularity: 64
+
+#save
+roc_file: arc_concat
+is_roc: False 
+
+# flags
+do_test: True
+is_ident: False   

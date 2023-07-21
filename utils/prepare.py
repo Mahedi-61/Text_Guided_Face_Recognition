@@ -3,34 +3,18 @@ import torchvision.transforms as transforms
 from utils.train_dataset import TextImgTrainDataset
 from utils.test_dataset import TextImgTestDataset 
 
-from utils.utils import load_model_weights, load_pretrained_arch_model
-from models.models import RNN_ENCODER, BERTHeading, ResNet18_ArcFace_ENCODER, BERT_ENCODER, resnet_face18
-from models.fusion_nets import ConcatFusion, LinearFusion, WordLevelCFA, ParagraphLevelCFA, ConcatAttention, WordLevelCFA_LSTM
-from models import net 
+from utils.utils import load_model_weights
+from models.models import RNN_ENCODER, BERTHeading, BERT_ENCODER
+from models.fusion_nets import (ConcatFusion, LinearFusion, WordLevelCFA, 
+                                ParagraphLevelCFA, ConcatAttention, WordLevelCFA_LSTM)
+from models import iresnet, net 
+from models.network import NetworkBuilder
 from utils.dataset_utils import *
 
 
 ###########   model   ############
-def prepare_image_encoder(args):
-    device = args.device
-    
-    # image encoder
-    image_encoder = ResNet18_ArcFace_ENCODER()
-    img_encoder_path = args.text_encoder_path.replace('text_encoder', 'image_encoder')
-    state_dict = torch.load(img_encoder_path, map_location='cpu')
-    image_encoder = load_model_weights(image_encoder, state_dict)
-    image_encoder.to(device)
-
-    for p in image_encoder.parameters():
-        p.requires_grad = False
-    image_encoder.eval()
-    return image_encoder
-
-
 def prepare_text_encoder(args, test):
     """
-    text_encoder is already finetuned. so set requires_grad = False
-    text_head need to train.
     In case test = True; set requires_grad = False for both model  
     """
     print("loading text encoder: ", args.text_encoder_path)
@@ -51,6 +35,7 @@ def prepare_text_encoder(args, test):
         text_encoder = RNN_ENCODER(args, nhidden=args.embedding_dim)
         state_dict = torch.load(args.text_encoder_path, map_location='cpu')
         text_encoder = load_model_weights(text_encoder, state_dict["model"]) 
+        print("loading text encoder weights: ", args.text_encoder_path)
         text_encoder.cuda()
         text_head = None 
 
@@ -65,30 +50,29 @@ def prepare_text_encoder(args, test):
     return text_encoder, text_head
 
 
-def prepare_model(args):
+### model for ArcFace
+def prepare_arcface(args):
     device = args.device
+    model = iresnet.iresnet18(pretrained=False, progress=True)
 
-    #archface model for image
-    model = resnet_face18(use_se=args.use_se)
-    model = torch.nn.DataParallel(model, device_ids=args.gpu_id)
-    model = load_pretrained_arch_model(model, args.load_model_path)
-    model.to(device)
+    checkpoint = torch.load(args.weights_arcface)
+    model.load_state_dict(checkpoint)
 
+    model = torch.nn.DataParallel(model, device_ids=args.gpu_id).to(device)
     for p in model.parameters():
         p.requires_grad = False
     model.eval()
+    print("loading pretrained arcface model")
     return model 
 
 
-#### model for Ada Face 
+#### model for AdaFace 
 def prepare_adaface(args):
     device = args.device
     architecture = "ir_18"
 
-    args.load_model_path = "weights/celeba/FE/adaface_ir18_webface4m.ckpt"
-    model = net.build_model(architecture)
-    
-    statedict = torch.load(args.load_model_path)['state_dict']
+    model = net.build_model(architecture)    
+    statedict = torch.load(args.weights_adaface)['state_dict']
     model_statedict = {key[6:]:val for key, val in statedict.items() if key.startswith('model.')}
     model.load_state_dict(model_statedict)
     
@@ -97,7 +81,25 @@ def prepare_adaface(args):
     for p in model.parameters():
         p.requires_grad = False
     model.eval()
+    print("loading pretrained adaface model")
     return model 
+
+
+#### model for MagFace 
+def prepare_magface(args):
+    device = args.device
+    resnet = NetworkBuilder(arch = "iresnet18")
+    resnet = torch.nn.DataParallel(resnet, device_ids=args.gpu_id).to(device)
+
+    mag_dict = torch.load(args.weights_magface)['state_dict']
+    del mag_dict["module.fc.weight"]
+    resnet.load_state_dict(mag_dict)
+    
+    for p in resnet.parameters():
+        p.requires_grad = False
+    resnet.eval()
+    print("loading pretrained magface model")
+    return resnet 
 
 
 def prepare_fusion_net(args):
@@ -106,7 +108,7 @@ def prepare_fusion_net(args):
         net = ConcatFusion()
 
     if args.fusion_type == "linear":
-        net = LinearFusion(final_dim = args.fusion_final_dim)
+        net = LinearFusion(args)
 
     elif args.fusion_type == "cross_attention":
         if args.using_BERT == False: 
@@ -126,44 +128,34 @@ def prepare_fusion_net(args):
     return net
 
 
-################ data ##############
-"""
-def get_one_batch_train_data(dataloader, text_encoder, text_head):
-    data = next(iter(dataloader))
-    imgs, words_embs, sent_emb, keys, label = prepare_train_data(data, text_encoder, text_head)
-    return imgs, words_embs, sent_emb
-"""
 
-def prepare_train_data(data, text_encoder, text_head):
+################ data ##############
+def prepare_train_data(data, text_encoder):
     imgs, captions, caption_lens, keys, label = data
     captions, sorted_cap_lens, sorted_cap_idxs = sort_sents(captions, caption_lens)
-    words_embs, sent_emb = encode_tokens(text_encoder, text_head, captions, sorted_cap_lens)
+    words_embs, sent_emb = encode_tokens(text_encoder, captions, sorted_cap_lens)
     sent_emb = rm_sort(sent_emb, sorted_cap_idxs)
     words_embs = rm_sort(words_embs, sorted_cap_idxs)
     return imgs, words_embs, sent_emb, keys, label, caption_lens
 
 
+
 def prepare_train_data_for_Bert(data, text_encoder, text_head):
     imgs, caps, masks, keys, cls_ids = data
-    words_emb, word_vector, sent_emb, sent_emb_org = encode_Bert_tokens(text_encoder, text_head, caps, masks)
-    return imgs, words_emb, word_vector, sent_emb, sent_emb_org, keys, cls_ids
+    words_emb, word_vector, sent_emb = encode_Bert_tokens(text_encoder, text_head, caps, masks)
+    return imgs, words_emb, word_vector, sent_emb, keys, cls_ids
 
-"""
-def get_one_batch_train_data_Bert(dataloader):
-    data = next(iter(dataloader))
-    imgs, words_emb, word_vector, sent_emb, keys, cls_ids = prepare_train_data_for_Bert(data)
-    return imgs, words_emb, word_vector, sent_emb
-"""
 
-def prepare_test_data(data, text_encoder, text_head):
+
+def prepare_test_data(data, text_encoder):
     img1, img2, cap1, cap2, cap_len1, cap_len2, pair_label = data
     cap1, sorted_cap_len1, sorted_cap_idxs = sort_sents(cap1, cap_len1)
-    words_emb1, sent_emb1 = encode_tokens(text_encoder, text_head, cap1, sorted_cap_len1)
+    words_emb1, sent_emb1 = encode_tokens(text_encoder, cap1, sorted_cap_len1)
     sent_emb1 = rm_sort(sent_emb1, sorted_cap_idxs)
     words_emb1 = rm_sort(words_emb1, sorted_cap_idxs)
 
     cap2, sorted_cap_len2, sorted_cap_idxs = sort_sents(cap2, cap_len2)
-    words_emb2, sent_emb2 = encode_tokens(text_encoder, text_head, cap2, sorted_cap_len2)
+    words_emb2, sent_emb2 = encode_tokens(text_encoder, cap2, sorted_cap_len2)
     sent_emb2 = rm_sort(sent_emb2, sorted_cap_idxs)
     words_emb2 = rm_sort(words_emb2, sorted_cap_idxs)
 
@@ -174,64 +166,61 @@ def prepare_test_data(data, text_encoder, text_head):
 def prepare_test_data_Bert(data, text_encoder, text_head):
     img1, img2, caption1, caption2, mask1, mask2, pair_label = data
 
-    words_emb1, word_vector1, sent_emb1, sent_emb_org1 = encode_Bert_tokens(text_encoder, text_head, caption1, mask1)
-    words_emb2, word_vector2, sent_emb2, sent_emb_org2 = encode_Bert_tokens(text_encoder, text_head, caption2, mask2)
+    words_emb1, word_vector1, sent_emb1 = encode_Bert_tokens(text_encoder, text_head, caption1, mask1)
+    words_emb2, word_vector2, sent_emb2 = encode_Bert_tokens(text_encoder, text_head, caption2, mask2)
 
-    return (img1, img2, words_emb1, words_emb2, word_vector1, word_vector2, 
-            sent_emb1, sent_emb2, sent_emb_org1, sent_emb_org2, pair_label) 
+    return (img1, img2, 
+            words_emb1, words_emb2, 
+            word_vector1, word_vector2, 
+            sent_emb1, sent_emb2, 
+            pair_label) 
+
 
 
 
 ############## dataloader #############
 def prepare_dataloader(args, split, transform):
-    imsize = args.img_size
     if transform is not None:
         image_transform = transform
-
     else:
-        if (split == "train") :
-            image_transform = transforms.Compose([
-                transforms.RandomCrop(imsize),
-                transforms.RandomHorizontalFlip()])
+        image_transform = None 
 
-        elif (split == "test"):
-            image_transform = transforms.Compose([
-                transforms.RandomCrop(imsize)])
-
-    if args.using_BERT == True: 
+    if args.using_BERT == True:
         train_filenames, train_captions, train_att_masks, \
+        valid_filenames, valid_captions, valid_att_masks, \
         test_filenames, test_captions, test_att_masks =  load_text_data_Bert(args.data_dir, args)
+
         if (split == "train"):
             train_ds = TextImgTrainDataset(train_filenames, train_captions, train_att_masks, 
                                     transform=image_transform, split="train", args=args)
 
 
-            valid_ds = TextImgTrainDataset(test_filenames, test_captions, test_att_masks, 
-                            transform=image_transform, split="valid", args=args)
+        elif (split == "valid"):
+            valid_ds = TextImgTestDataset(valid_filenames, valid_captions, valid_att_masks, 
+                                transform=image_transform, split="valid", args=args)
 
         elif (split == "test"):
             test_ds =  TextImgTestDataset(test_filenames, test_captions, test_att_masks, 
-                                        transform=image_transform, args=args)
+                                transform=image_transform, split="test", args=args)
 
 
     elif args.using_BERT == False:
-        train_names, train_captions, test_names, test_captions, ixtoword, wordtoix, n_words = \
-                            load_text_data(args.data_dir, args.captions_per_image)
+        train_names, train_captions, valid_names, valid_captions, \
+        test_names, test_captions, ixtoword, wordtoix, n_words = \
+            load_text_data(args.data_dir, args.captions_per_image)
 
         if (split == "train"):
             train_ds = TextImgTrainDataset(train_names, train_captions, None, ixtoword, wordtoix, n_words,
-                            transform=image_transform, split="train", args=args)
+                                        transform=image_transform, split="train", args=args)
 
-
-            valid_ds = TextImgTrainDataset(test_names, test_captions, None, ixtoword, wordtoix, n_words,
-                            transform=image_transform, split="valid", args=args)
-
+        elif (split == "valid"):
+            valid_ds =  TextImgTestDataset(valid_names, valid_captions, None, ixtoword, wordtoix, n_words,
+                                        transform=image_transform, split="valid", args=args)
         elif (split == "test"):
             test_ds =  TextImgTestDataset(test_names, test_captions, None, ixtoword, wordtoix, n_words,
-                                        transform=image_transform, args=args)
+                                        transform=image_transform, split="test", args=args)
 
 
-    del  train_captions, test_captions
     if (split == "train"):
         train_dl = torch.utils.data.DataLoader(
             train_ds, 
@@ -239,22 +228,26 @@ def prepare_dataloader(args, split, transform):
             drop_last=True,
             num_workers=args.num_workers, 
             shuffle=True)
+        
+        return train_dl, train_ds
 
+    elif (split == "valid"):
         valid_dl = torch.utils.data.DataLoader(
             valid_ds, 
             batch_size=args.batch_size, 
-            drop_last=True,
+            drop_last=False,
             num_workers=args.num_workers, 
-            shuffle=True)
+            shuffle=False)
 
-        return train_dl, train_ds, valid_dl, valid_ds 
+        return valid_dl, valid_ds 
 
 
     elif (split == "test"):
         test_dl = torch.utils.data.DataLoader(
             test_ds, 
             batch_size=args.batch_size, 
-            num_workers=args.num_workers, 
+            num_workers=args.num_workers,
+            drop_last = False, 
             shuffle=False)
 
         return test_dl, test_ds
