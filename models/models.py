@@ -6,8 +6,10 @@ from torchvision import models
 import torch.utils.model_zoo as model_zoo
 import torch.nn.functional as F
 from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
-from transformers import BertModel
+from transformers import (BertModel, AlignTextModel, CLIPTextModel, 
+                          FlavaTextModel, BlipTextModel, GroupViTTextModel)
 import torch.nn.functional as F
+from models.fusion_nets import SelfAttention 
 from torchsummary import summary
 import numpy as np 
 import math 
@@ -96,37 +98,57 @@ class IRBlock(nn.Module):
 class ProjectionHead(nn.Module):
     def __init__(
         self,
-        embedding_dim,
+        input_dim,
         projection_dim,
-        dropout = 0.1
+        dropout = 0.4
     ):
         super().__init__()
-        self.projection = nn.Linear(embedding_dim, projection_dim)
+        self.projection = nn.Linear(input_dim, projection_dim)
         self.gelu = nn.GELU()
-        #self.fc = nn.Linear(projection_dim, projection_dim)
+        self.fc = nn.Linear(projection_dim, projection_dim)
         self.dropout = nn.Dropout(dropout)
         #self.layer_norm = nn.LayerNorm(projection_dim)
     
     def forward(self, x):
-        projected = self.projection(x)
+        x = self.projection(x)
         #x = self.gelu(projected)
         #x = self.fc(x)
         #x = self.dropout(x)
         #x = x + projected
         #x = self.layer_norm(x)
-        return projected
+        x = F.normalize(x, p=2, dim=-1)
+        return x
+
+
+def get_encoder(args):
+    if args.bert_type == "bert":
+        return BertModel.from_pretrained(args.bert_config)
+
+    elif args.bert_type == "align":
+        return AlignTextModel.from_pretrained(args.align_config)
+
+    elif args.bert_type == "clip": #512 text dim
+        return CLIPTextModel.from_pretrained(args.clip_config)
+    
+    elif args.bert_type == "blip":
+        return BlipTextModel.from_pretrained(args.blip_config)
+    
+    elif args.bert_type == "falva":
+        return FlavaTextModel.from_pretrained(args.falva_config)
+    
+    elif args.bert_type == "groupvit": #256 text dim
+        return GroupViTTextModel.from_pretrained(args.groupvit_config)
 
 
 
-class BERT_ENCODER(nn.Module):
+class TextEncoder(nn.Module):
     def __init__(self, args):
-        super(BERT_ENCODER, self).__init__()
-        self.model = BertModel.from_pretrained(args.bert_config)
-        #self.model = AutoModel.from_pretrained(args.bert_config)
+        super(TextEncoder, self).__init__()
+        self.model = get_encoder(args)
+
+        print("Loading : ", args.bert_type)
         for p in self.model.parameters():
             p.requires_grad = True
-
-        print("Bert encoder trainable: ", True)
 
     def forward(self, captions, mask):
         outputs = self.model(captions, attention_mask=mask)
@@ -145,14 +167,13 @@ class BERT_ENCODER(nn.Module):
         return words_emb, sent_emb
 
 
-
 class Bert_Word_Mapping(nn.Module):
     def __init__(self, feat_dim):
         super(Bert_Word_Mapping, self).__init__()
-        Ks = [1, 2, 3]
+        Ks = [2, 3, 4]
         in_channel = 1
         out_channel = feat_dim #* 4
-        self.convs1 = nn.ModuleList([nn.Conv2d(in_channel, out_channel, (K, 768)) for K in Ks]) 
+        self.convs1 = nn.ModuleList([nn.Conv2d(in_channel, out_channel, (K, 768)) for K in Ks]) #512 for clip
 
         self.dropout = nn.Dropout(0.1)
         #self.mapping = nn.Linear(out_channel, feat_dim)
@@ -160,21 +181,18 @@ class Bert_Word_Mapping(nn.Module):
     def forward(self, words_emb):
         x = words_emb.unsqueeze(1)  # (batch_size, 1, token_num, embedding_dim)
         x = [F.relu(conv(x)).squeeze(3) for conv in self.convs1]  # [(batch_size, out_channel, W), ...]*len(Ks)
-
-        #remove these 2 lines to skip second projection
-        #x = [self.dropout(i.transpose(2, 1)) for i in x] 
-        #x = [self.mapping(i).transpose(2, 1) for i in x]
         return x
 
 
-
-class BERTHeading(nn.Module):
+class TextHeading(nn.Module):
     def __init__(self, args):
-        super(BERTHeading, self).__init__()
+        super(TextHeading, self).__init__()
         self.feat_dim = args.aux_feat_dim_per_granularity
-        self.sentence_feat = ProjectionHead(embedding_dim=768, projection_dim=self.feat_dim)
         self.bwm = Bert_Word_Mapping(self.feat_dim)
-        self.word_feat = nn.Linear(768, self.feat_dim)
+        self.args = args 
+
+        #self.sentence_feat = ProjectionHead(input_dim=768, projection_dim=self.feat_dim) #512 for clip, 256 for groupVit
+        #self.word_feat = nn.Linear(768, self.feat_dim)
 
     def get_each_word_feature(self, x):
         bs = x[0].size(0)
@@ -183,9 +201,10 @@ class BERTHeading(nn.Module):
         c = x[2].transpose(2, 1)
         code = []
         for i in range(bs):
-            t = [torch.amax(torch.stack((a[i, j], b[i, j], c[i, j])), dim=0) for j in range(18)]
-            t +=  [torch.amax(torch.stack((a[i, 18], b[i, 18])), dim=0)]
-            t += [torch.cuda.FloatTensor(a[i, 19])]  
+            seq = self.args.bert_words_num - 1 - 3 #removing [CLS] token and two positions (for 1->2, 2->3)
+            t = [torch.amax(torch.stack((a[i, j], b[i, j], c[i, j])), dim=0) for j in range(seq)]
+            t +=  [torch.amax(torch.stack((a[i, seq], b[i, seq])), dim=0)]
+            t += [torch.cuda.FloatTensor(a[i, seq+1])]  
             t = torch.stack(t)
             code.append(t)
 
@@ -193,29 +212,31 @@ class BERTHeading(nn.Module):
         code = F.normalize(code, p=2, dim=2)
         return code 
 
+
     def get_word_feature(self, x):
         x = [F.max_pool1d(i, i.size(2)).squeeze(2) for i in x]
         output = torch.stack((x[0], x[1], x[2])).mean(dim=0)
         output = F.normalize(output, p=2, dim=1)
         return output 
-        
+
+
     def forward(self, words_emb, sent_emb):
-        sent_emb = self.sentence_feat(sent_emb) #batch_size x 64
+        #sent_emb = x = self.sentence_feat(sent_emb) #batch_size x 64
         #words_emb = self.word_feat(words_emb) #batch_size x 20 x 256
         
         x = self.bwm(words_emb)
         words_emb = self.get_each_word_feature(x) 
-        word_vector = self.get_word_feature(x)
+        sent_emb = self.get_word_feature(x)
 
         words_emb = words_emb.transpose(1, 2)
-        return words_emb, word_vector, sent_emb
+        return words_emb, sent_emb
 
 
 
-class RNN_ENCODER(nn.Module):
+class RNNEncoder(nn.Module):
     def __init__(self, args, ninput=300, drop_prob=0.5,
                  nhidden=128, nlayers=1, bidirectional=True):
-        super(RNN_ENCODER, self).__init__()
+        super(RNNEncoder, self).__init__()
 
         self.n_steps = args.lstm_words_num
         self.ntoken = args.vocab_size  # size of the dictionary
@@ -297,109 +318,99 @@ class RNN_ENCODER(nn.Module):
         else:
             sent_emb = hidden.transpose(0, 1).contiguous()
         sent_emb = sent_emb.view(-1, self.nhidden * self.num_directions)
+
+        #normalize 
+        sent_emb = F.normalize(sent_emb, p=2, dim=-1)
         return words_emb, sent_emb
         
 
 
-class ArcFace_Heading(nn.Module):
+class ImageHeading(nn.Module):
     def __init__(self, args):
-        super(ArcFace_Heading, self).__init__()
-        self.project_global = ProjectionHead(embedding_dim=512, projection_dim=args.aux_feat_dim_per_granularity)
-        self.project_local =  ProjectionHead(embedding_dim=256, projection_dim=args.aux_feat_dim_per_granularity)
+        super(ImageHeading, self).__init__()
+        self.project_global = ProjectionHead(input_dim=512, projection_dim=args.aux_feat_dim_per_granularity)
+        self.imim = IMIM(args, channel_dim = 256)
         
     def forward(self, global_image, local_image):
+        local_image = self.imim(local_image)
+        global_image = self.project_global(global_image) #batch_size x 256
+
+        return  global_image, local_image, 
+
+
+
+class ArcFaceHeadingf(nn.Module):
+    def __init__(self, args):
+        super(ArcFaceHeadingf, self).__init__()
+        channel_dim = args.aux_feat_dim_per_granularity * 2
+        self.project_local =  ProjectionHead(embedding_dim=256, projection_dim=args.aux_feat_dim_per_granularity)
+        self.project_global = ProjectionHead(embedding_dim=512*7*7, projection_dim=args.aux_feat_dim_per_granularity)
+
+        self.bn_img = nn.BatchNorm2d(channel_dim)
+        self.bn_1d = nn.BatchNorm1d(args.aux_feat_dim_per_granularity, affine=False)
+        self.dropout = nn.Dropout(0.4)
+        self.sa = SelfAttention(channel_dim, scale=1)
+        self.maxpool = nn.MaxPool2d(kernel_size=2)
+        self.conv = nn.Conv2d(512, channel_dim, kernel_size=(3, 3), padding=1) 
+        self.relu = nn.ReLU()
+        self.ln = nn.LayerNorm([channel_dim, 7, 7])
+        #self.avg = nn.AvgPool2d(7)
+        self.flat = nn.Flatten()
+
+        
+    def forward(self, global_image, local_image):
+        #img = self.relu(self.conv(global_image)) #512x7x7
+        img = global_image
+        img = self.dropout(self.bn_img(img))
+        img = self.sa(img, img)
+        img = self.ln(img)
+        img = self.flat(img)
+        img = self.project_global(img)
+        img = self.bn_1d(img)
+        
         local_image = local_image.permute((0, 2, 3, 1))
         local_image = self.project_local(local_image) #batch_size x 16 x 16 x 128
         local_image = F.normalize(local_image, p=2, dim=-1)
         local_image = local_image.permute((0, 3, 1, 2))
 
-        global_image = self.project_global(global_image) #batch_size x 128
-        global_image = F.normalize(global_image, p=2, dim=-1)
-        return  global_image, local_image, 
+        return img, local_image 
 
 
 
-class AdaFace(nn.Module):
-    def __init__(self,
-                 embedding_size,
-                 classnum,
-                 m=0.4,
-                 h=0.333,
-                 s=64.,
-                 t_alpha=1.0,
-                 ):
-        super(AdaFace, self).__init__()
-        self.classnum = classnum
-        self.kernel = torch.nn.Parameter(torch.Tensor(embedding_size, classnum))
+class IMIM(nn.Module):
+    def __init__(self, args, channel_dim):
+        super(IMIM, self).__init__()
+        self.channel_dim = channel_dim
+        self.project_local =  ProjectionHead(input_dim=256, 
+                                             projection_dim=args.aux_feat_dim_per_granularity)
+        self.bn_img = nn.BatchNorm2d(self.channel_dim)
+        self.sa = SelfAttention(channel_dim = self.channel_dim, scale=1)
+        self.conv1x1_1 = nn.Conv2d(self.channel_dim, self.channel_dim//2, kernel_size=(1, 1)) 
+        self.relu = nn.ReLU()
+        self.conv1x1_2 = nn.Conv2d(self.channel_dim//2, self.channel_dim, kernel_size=(1, 1)) 
+        self.ln = nn.LayerNorm([self.channel_dim, 14, 14])
+        
+    def forward(self, img):
+        img = self.bn_img(img)
+        img = self.sa(img, img)
+        img = self.ln(img)
+    
+        img = self.relu(self.conv1x1_1(img))
+        img = self.relu(self.conv1x1_2(img))
 
-        # initial kernel
-        self.kernel.data.uniform_(-1, 1).renorm_(2,1,1e-5).mul_(1e5)
-        self.m = m 
-        self.eps = 1e-3
-        self.h = h
-        self.s = s
-
-        # ema prep
-        self.t_alpha = t_alpha
-        self.register_buffer('t', torch.zeros(1))
-        self.register_buffer('batch_mean', torch.ones(1)*(20))
-        self.register_buffer('batch_std', torch.ones(1)*100)
-
-        print('\n\AdaFace with the following property')
-        print('self.m', self.m)
-        print('self.h', self.h)
-        print('self.s', self.s)
-        print('self.t_alpha', self.t_alpha)
-
-
-    def forward(self, embbedings, norms, label):
-
-        kernel_norm = l2_norm(self.kernel,axis=0)
-        cosine = torch.mm(embbedings,kernel_norm)
-        cosine = cosine.clamp(-1+self.eps, 1-self.eps) # for stability
-        del kernel_norm
-
-        safe_norms = torch.clip(norms, min=0.001, max=100) # for stability
-        safe_norms = safe_norms.clone().detach()
-
-        # update batchmean batchstd
-        with torch.no_grad():
-            mean = safe_norms.mean().detach()
-            std = safe_norms.std().detach()
-            self.batch_mean = mean * self.t_alpha + (1 - self.t_alpha) * self.batch_mean
-            self.batch_std =  std * self.t_alpha + (1 - self.t_alpha) * self.batch_std
-
-        margin_scaler = (safe_norms - self.batch_mean) / (self.batch_std+self.eps) # 66% between -1, 1
-        margin_scaler = margin_scaler * self.h # 68% between -0.333 ,0.333 when h:0.333
-        margin_scaler = torch.clip(margin_scaler, -1, 1)
-        # ex: m=0.5, h:0.333
-        # range
-        #       (66% range)
-        #   -1 -0.333  0.333   1  (margin_scaler)
-        # -0.5 -0.166  0.166 0.5  (m * margin_scaler)
-
-        # g_angular
-        m_arc = torch.zeros(label.size()[0], cosine.size()[1], device=cosine.device)
-        m_arc.scatter_(1, label.reshape(-1, 1), 1.0)
-        g_angular = self.m * margin_scaler * -1
-        m_arc = m_arc * g_angular
-        theta = cosine.acos()
-        theta_m = torch.clip(theta + m_arc, min=self.eps, max=math.pi-self.eps)
-        cosine = theta_m.cos()
-
-        # g_additive
-        m_cos = torch.zeros(label.size()[0], cosine.size()[1], device=cosine.device)
-        m_cos.scatter_(1, label.reshape(-1, 1), 1.0)
-        g_add = self.m + (self.m * margin_scaler)
-        m_cos = m_cos * g_add
-        cosine = cosine - m_cos
-
-        # scale
-        scaled_cosine_m = cosine * self.s
-        return scaled_cosine_m
+        img = img.permute((0, 2, 3, 1))
+        img = self.project_local(img) #batch_size x 14 x 14 x 256
+        img = F.normalize(img, p=2, dim=-1)
+        img = img.permute((0, 3, 1, 2))
+        return img
 
 
 
 if __name__ == "__main__":
     from easydict import EasyDict as edict
     args = edict()
+    args.aux_feat_dim_per_granularity = 256
+    x = torch.randn(128, 512, 14, 14)
+    net = ImageHeading(args)
+    y = net(x)
+    print(y.shape)

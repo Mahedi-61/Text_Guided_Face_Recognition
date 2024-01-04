@@ -9,8 +9,7 @@ import pandas as pd
 from PIL import Image
 import _pickle as pickle
 import gc
-from transformers import BertTokenizer
-#from transformers import AutoTokenizer
+from transformers import  AutoTokenizer, CLIPTokenizer
 
 
 def sort_sents(captions, caption_lens):
@@ -42,9 +41,9 @@ def encode_Bert_tokens(text_encoder, text_head, caption, mask):
 
     with torch.no_grad():
          words_emb, sent_emb_org = text_encoder(caption, mask)
-         words_emb, word_vector, sent_emb = text_head(words_emb, sent_emb_org)
+         words_emb, sent_emb = text_head(words_emb, sent_emb_org)
 
-    return words_emb.detach(), word_vector.detach(), sent_emb.detach()
+    return words_emb.detach(), sent_emb.detach()
 
 
 def rm_sort(caption, sorted_cap_idxs):
@@ -84,7 +83,24 @@ def get_imgs(img_path, split, transform=None, model_type="arcface"):
 def load_captions_Bert(data_dir, filenames, args):
     # convert the raw text into a list of tokens.
     # attention_mask (which tokens should be used by the model 1 - use or 0 - don’t use).
-    tokenizer = BertTokenizer.from_pretrained(args.bert_config)
+    if args.bert_type == "bert": 
+        tokenizer = AutoTokenizer.from_pretrained(args.bert_config)
+
+    elif args.bert_type == "align":
+        tokenizer = AutoTokenizer.from_pretrained(args.align_config, use_fast=False)
+
+    elif args.bert_type == "clip":
+         tokenizer = AutoTokenizer.from_pretrained(args.clip_config, use_fast=False)
+
+    elif args.bert_type == "blip":
+         tokenizer = AutoTokenizer.from_pretrained(args.blip_config, use_fast=False)
+
+    elif args.bert_type == "falva":
+         tokenizer = AutoTokenizer.from_pretrained(args.falva_config, use_fast=False)
+    
+    elif args.bert_type == "groupvit":
+         tokenizer = CLIPTokenizer.from_pretrained(args.groupvit_config, use_fast=False)
+
     all_captions = []
     all_attention_mask = []
 
@@ -165,7 +181,7 @@ def load_captions(data_dir, filenames, embeddings_num):
 
 
 def load_text_data_Bert(data_dir, args):
-    filepath = os.path.join(data_dir, 'captions_BERT.pickle')
+    filepath = os.path.join(data_dir, 'captions_%s.pickle' % args.bert_type)
 
     if not os.path.isfile(filepath):
         train_names = load_filenames(data_dir, 'train')
@@ -182,7 +198,7 @@ def load_text_data_Bert(data_dir, args):
                         f, protocol=2)
             print('\nSave to: ', filepath)
     else:
-        print("Loading captions_BERT.pickle")
+        print("Loading ", filepath)
         with open(filepath, 'rb') as f:
             gc.disable()
             x = pickle.load(f)
@@ -293,8 +309,8 @@ def load_filenames(data_dir, split):
     if os.path.isfile(filepath):
         with open(filepath, 'rb') as f:
             filenames = pickle.load(f)
-        print('\nLoad %s filenames from: %s (%d)' % (split, filepath, len(filenames)))
-        print("Sample %s filenames: %s" % (split, filenames[0]))
+        print('Load %s filenames from: %s (%d)' % (split, filepath, len(filenames)))
+        #print("Sample %s filenames: %s" % (split, filenames[0]))
     else:
         filenames = []
     return filenames

@@ -1,7 +1,7 @@
 CONFIG_NAME: Fusion
-dataset_name: face2text
+dataset_name: face2text #face2text
 data_dir: ./data/face2text
-test_pair_list: ./data/face2text/images/test_199_sub.txt 
+test_pair_list: ./data/face2text/images/test_199_sub.txt ##change 
 valid_pair_list: ./data/face2text/images/valid_199_sub.txt 
 
 weights_adaface: "./weights/pretrained/adaface_ir18_webface4m.ckpt"
@@ -9,11 +9,9 @@ weights_arcface: "./weights/pretrained/arcface_ir18_ms1mv3.pth"
 weights_magface: "./weights/pretrained/magface_iresnet18_casia_dp.pth"
 
 checkpoints_path: ./checkpoints
-resume_model_path: ./weights/face2text/Fusion/bert_cross_attention_epoch_.pth
-
-text_encoder_path: "./checkpoints/face2text/Train/BiLSTM_arcface/LSTM_text_encoder_12.pth"
-image_encoder_path: "./checkpoints/face2text/Train/BiLSTM_arcface/arcface_image_encoder_12.pth"
-
+text_encoder_path: "./checkpoints/face2text/Train/BiLSTM_arcface/LSTM_text_encoder_32.pth"
+image_encoder_path: "./checkpoints/face2text/Train/BiLSTM_arcface/arcface_image_encoder_32.pth"
+resume_epoch: 1
 
 # machine setup 
 num_workers: 8 
@@ -29,15 +27,14 @@ resume_epoch: 1
 
 
 # encoder settings
-en_type: LSTM #LSTM, GRU, BERT 
-using_BERT: False         
+en_type: LSTM #LSTM, GRU, BERT      
 lstm_words_num: 18 
 embedding_dim: 256
-captions_per_image: 4 #10
+captions_per_image: 4 #4, 10
 
 backbone: resnet18
 classify: softmax
-num_classes: 4500 
+num_classes: 4500 #4500 
 metric: arc_margin 
 easy_margin: False
 loss: focal_loss 
@@ -45,28 +42,26 @@ optimizer: sgd
 use_se: False
 
 # training settings 
-lr_image_train: 0.01   #0.01 for ArcFace
+lr_image_train: 0.1   #0.01 for ArcFace
 lr_step: 4
 gamma: 0.5  
 weight_decay: 0.0005
 lr_head: 0.001
-patience: 2 
-factor: 0.70
 temperature: 1.0
 
 max_epoch: 64
-batch_size: 128 
-test_interval: 2
-save_interval: 1
+batch_size: 64 
+test_interval: 30
+save_interval: 2
 trainable: False
 
 # fusion arch
 fusion_type: linear #cross_attention, linear, paragraph_attention, concat
-fusion_final_dim: 768  
+fusion_final_dim: 640  
 aux_feat_dim_per_granularity: 256
 
 #save
-roc_file: arc_concat
+roc_file: fusion_arc_lstm_face2text
 is_roc: False 
 
 # flags

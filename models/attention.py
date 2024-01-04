@@ -9,8 +9,8 @@ def conv1x1(in_planes, out_planes):
 
 def func_attention(query, context, gamma1):
     """
-    query: batch x ndf x queryL                    32, 256, cap_len
-    context: batch x ndf x ih x iw (sourceL=ihxiw) 32, 256, 17, 17
+    query: batch x ndf x queryL                    16, 256, cap_len
+    context: batch x ndf x ih x iw (sourceL=ihxiw) 16, 256, 14, 14
     mask: batch_size x sourceL
     """
     batch_size, queryL = query.size(0), query.size(2)
@@ -19,21 +19,21 @@ def func_attention(query, context, gamma1):
 
     #ndf = D, queryL = T
     # --> batch x sourceL x D
-    context = context.view(batch_size, -1, sourceL)  #v --> b x D x 289
-    contextT = torch.transpose(context, 1, 2).contiguous() #vT --> b x 289 x D
+    context = context.view(batch_size, -1, sourceL)  #v --> b x D x 196
+    contextT = torch.transpose(context, 1, 2).contiguous() #vT --> b x 196 x D
 
     # Get attention
     # batch x sourceL x T = (batch x sourceL x D)(batch x D x T)
     attn = torch.bmm(contextT, query) 
     attn = attn.view(batch_size*sourceL, queryL)
-    attn = nn.Softmax()(attn) 
+    attn = nn.Softmax(dim=-1)(attn) 
     
     attn = attn.view(batch_size, sourceL, queryL)   # batch x sourceL x T
     attn = torch.transpose(attn, 1, 2).contiguous() # batch x T x sourceL
     attn = attn.view(batch_size*queryL, sourceL)
 
     attn = attn * gamma1
-    attn = nn.Softmax()(attn)
+    attn = nn.Softmax(dim=-1)(attn)
     attn = attn.view(batch_size, queryL, sourceL)    # batch x T x sourceL
     attnT = torch.transpose(attn, 1, 2).contiguous() # batch x sourceL x T
 

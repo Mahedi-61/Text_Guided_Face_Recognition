@@ -1,4 +1,7 @@
 **/images
+**/images_bad
+**/images_poor
+**/images_verybad
 **/raw_data
 ./captions_RNN.pickle
 ./captions_BERT.pickle

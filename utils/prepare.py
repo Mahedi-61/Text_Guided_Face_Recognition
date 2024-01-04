@@ -1,53 +1,50 @@
 import torch
-import torchvision.transforms as transforms
-from utils.train_dataset import TextImgTrainDataset
-from utils.test_dataset import TextImgTestDataset 
+from utils.train_dataset import TrainDataset
+from utils.test_dataset import TestDataset 
 
-from utils.utils import load_model_weights
-from models.models import RNN_ENCODER, BERTHeading, BERT_ENCODER
-from models.fusion_nets import (ConcatFusion, LinearFusion, WordLevelCFA, 
-                                ParagraphLevelCFA, ConcatAttention, WordLevelCFA_LSTM)
+from utils.utils import load_model_weights, load_fusion_net
+from models.models import RNNEncoder, TextHeading, TextEncoder, ImageHeading
+from models.fusion_nets import (LinearFusion, Working, WordLevelCFA_LSTM)
 from models import iresnet, net 
 from models.network import NetworkBuilder
 from utils.dataset_utils import *
 
 
 ###########   model   ############
-def prepare_text_encoder(args, test):
-    """
-    In case test = True; set requires_grad = False for both model  
-    """
-    print("loading text encoder: ", args.text_encoder_path)
-    
-    if args.using_BERT == True:
-        text_encoder =  BERT_ENCODER(args)
+def prepare_text_encoder(args):    
+    if args.en_type == "BERT":
+        text_encoder =  TextEncoder(args)
         text_encoder = torch.nn.DataParallel(text_encoder, device_ids=args.gpu_id).cuda()
         state_dict = torch.load(args.text_encoder_path)
         text_encoder.load_state_dict(state_dict['model'])
 
-        text_head = BERTHeading(args)
+        text_head = TextHeading(args)
         text_head = torch.nn.DataParallel(text_head, device_ids=args.gpu_id).cuda()
         text_head.load_state_dict(state_dict['head'])
         del state_dict
 
 
-    elif args.using_BERT == False:
-        text_encoder = RNN_ENCODER(args, nhidden=args.embedding_dim)
+    elif args.en_type == "LSTM":
+        text_encoder = RNNEncoder(args, nhidden=args.embedding_dim)
         state_dict = torch.load(args.text_encoder_path, map_location='cpu')
         text_encoder = load_model_weights(text_encoder, state_dict["model"]) 
-        print("loading text encoder weights: ", args.text_encoder_path)
+        
         text_encoder.cuda()
         text_head = None 
 
-    if test == True:
-        for p in text_encoder.parameters():
-            p.requires_grad = False
-
-        if text_head is not None:
-            for p in text_head.parameters():
-                p.requires_grad = False  
-
+    print("loading text encoder weights: ", args.text_encoder_path)
     return text_encoder, text_head
+
+
+def prepare_image_head(args):
+    print("loading image encoder: ", args.image_encoder_path)
+    head = ImageHeading(args)
+
+    head = torch.nn.DataParallel(head, device_ids=args.gpu_id).cuda()
+    state_dict = torch.load(args.image_encoder_path)
+    head.load_state_dict(state_dict['image_head'])
+    return head 
+
 
 
 ### model for ArcFace
@@ -102,29 +99,23 @@ def prepare_magface(args):
     return resnet 
 
 
+
 def prepare_fusion_net(args):
     # fusion models
-    if args.fusion_type == "concat":
-        net = ConcatFusion()
-
     if args.fusion_type == "linear":
         net = LinearFusion(args)
 
-    elif args.fusion_type == "cross_attention":
-        if args.using_BERT == False: 
+    elif args.fusion_type == "fcfm":
+        if args.en_type == "LSTM": 
             net = WordLevelCFA_LSTM(channel_dim = 256)
 
-        elif args.using_BERT == True:  
-            net = WordLevelCFA(channel_dim = args.aux_feat_dim_per_granularity)
-
-    elif args.fusion_type == "concat_attention":
-        net = ConcatAttention()
-
-    elif args.fusion_type == "paragraph_attention":
-        print("fusion type: paragraph_attention")
-        net = ParagraphLevelCFA()
+        elif args.en_type == "BERT":  
+            net = Working(channel_dim = args.aux_feat_dim_per_granularity)
 
     net = torch.nn.DataParallel(net, device_ids=args.gpu_id).to(args.device)
+    print("loading checkpoint; epoch: ", args.fusion_net_path)
+    net = load_fusion_net(net, args.fusion_net_path) 
+    
     return net
 
 
@@ -141,9 +132,9 @@ def prepare_train_data(data, text_encoder):
 
 
 def prepare_train_data_for_Bert(data, text_encoder, text_head):
-    imgs, caps, masks, keys, cls_ids = data
-    words_emb, word_vector, sent_emb = encode_Bert_tokens(text_encoder, text_head, caps, masks)
-    return imgs, words_emb, word_vector, sent_emb, keys, cls_ids
+    caps, masks = data
+    words_emb, sent_emb = encode_Bert_tokens(text_encoder, text_head, caps, masks)
+    return words_emb, sent_emb
 
 
 
@@ -166,15 +157,13 @@ def prepare_test_data(data, text_encoder):
 def prepare_test_data_Bert(data, text_encoder, text_head):
     img1, img2, caption1, caption2, mask1, mask2, pair_label = data
 
-    words_emb1, word_vector1, sent_emb1 = encode_Bert_tokens(text_encoder, text_head, caption1, mask1)
-    words_emb2, word_vector2, sent_emb2 = encode_Bert_tokens(text_encoder, text_head, caption2, mask2)
+    words_emb1, sent_emb1 = encode_Bert_tokens(text_encoder, text_head, caption1, mask1)
+    words_emb2, sent_emb2 = encode_Bert_tokens(text_encoder, text_head, caption2, mask2)
 
     return (img1, img2, 
             words_emb1, words_emb2, 
-            word_vector1, word_vector2, 
             sent_emb1, sent_emb2, 
             pair_label) 
-
 
 
 
@@ -185,39 +174,39 @@ def prepare_dataloader(args, split, transform):
     else:
         image_transform = None 
 
-    if args.using_BERT == True:
+    if args.en_type == "BERT":
         train_filenames, train_captions, train_att_masks, \
         valid_filenames, valid_captions, valid_att_masks, \
         test_filenames, test_captions, test_att_masks =  load_text_data_Bert(args.data_dir, args)
 
         if (split == "train"):
-            train_ds = TextImgTrainDataset(train_filenames, train_captions, train_att_masks, 
+            train_ds = TrainDataset(train_filenames, train_captions, train_att_masks, 
                                     transform=image_transform, split="train", args=args)
 
 
         elif (split == "valid"):
-            valid_ds = TextImgTestDataset(valid_filenames, valid_captions, valid_att_masks, 
+            valid_ds = TestDataset(valid_filenames, valid_captions, valid_att_masks, 
                                 transform=image_transform, split="valid", args=args)
 
         elif (split == "test"):
-            test_ds =  TextImgTestDataset(test_filenames, test_captions, test_att_masks, 
+            test_ds =  TestDataset(test_filenames, test_captions, test_att_masks, 
                                 transform=image_transform, split="test", args=args)
 
 
-    elif args.using_BERT == False:
+    elif args.en_type == "LSTM":
         train_names, train_captions, valid_names, valid_captions, \
         test_names, test_captions, ixtoword, wordtoix, n_words = \
             load_text_data(args.data_dir, args.captions_per_image)
 
         if (split == "train"):
-            train_ds = TextImgTrainDataset(train_names, train_captions, None, ixtoword, wordtoix, n_words,
+            train_ds = TrainDataset(train_names, train_captions, None, ixtoword, wordtoix, n_words,
                                         transform=image_transform, split="train", args=args)
 
         elif (split == "valid"):
-            valid_ds =  TextImgTestDataset(valid_names, valid_captions, None, ixtoword, wordtoix, n_words,
+            valid_ds =  TestDataset(valid_names, valid_captions, None, ixtoword, wordtoix, n_words,
                                         transform=image_transform, split="valid", args=args)
         elif (split == "test"):
-            test_ds =  TextImgTestDataset(test_names, test_captions, None, ixtoword, wordtoix, n_words,
+            test_ds =  TestDataset(test_names, test_captions, None, ixtoword, wordtoix, n_words,
                                         transform=image_transform, split="test", args=args)
 
 

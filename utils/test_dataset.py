@@ -9,25 +9,27 @@ from utils.dataset_utils import *
 ################################################################
 #                    Test Dataset
 ################################################################
-class TextImgTestDataset(data.Dataset):
+class TestDataset(data.Dataset):
     def __init__(self, filenames, captions, att_masks, ixtoword=None, wordtoix=None, 
                     n_words=None, transform=None, split="", args=None):
+        
+        print("\n############## Loading %s dataset ################" % split)
         self.split= split
         self.transform = transform
         self.data_dir = args.data_dir
         self.dataset_name = args.dataset_name
         self.embeddings_num = args.captions_per_image
         self.model_type = args.model_type 
-        self.is_ident = args.is_ident 
+        #self.is_ident = args.is_ident 
         self.filenames = filenames
         self.captions = captions 
 
-        self.using_BERT = args.using_BERT 
-        if args.using_BERT == True: 
+        self.en_type = args.en_type 
+        if args.en_type == "BERT": 
             self.word_num = args.bert_words_num
             self.att_masks = att_masks
 
-        elif args.using_BERT == False:
+        elif args.en_type == "LSTM":
             self.word_num = args.lstm_words_num
             self.ixtoword = ixtoword
             self.wordtoix = wordtoix
@@ -99,21 +101,22 @@ class TextImgTestDataset(data.Dataset):
         real_index1 = self.filenames.index(key1)
         real_index2 = self.filenames.index(key2)
 
-        # randomly select a sentence
-        sent_ix1 = random.randint(0, self.embeddings_num)
+        #randomly select a sentence
+        #sent_ix1 = random.randint(0, self.embeddings_num)
+        #select the first sentence 
+        sent_ix1 = 0
         new_sent_ix1 = real_index1 * self.embeddings_num + sent_ix1
         
         # randomly select another sentence
-        sent_ix2 = random.randint(0, self.embeddings_num)
+        sent_ix2 = 0 #random.randint(0, self.embeddings_num)
         new_sent_ix2 = real_index2 * self.embeddings_num + sent_ix2
         
-
-        if self.using_BERT == True: 
+        if self.en_type == "BERT": 
             cap1, mask1 = self.captions[new_sent_ix1], self.att_masks[new_sent_ix1]
             cap2, mask2 = self.captions[new_sent_ix2], self.att_masks[new_sent_ix2]
             return img1, img2, cap1, cap2, mask1, mask2, pair_label
 
-        elif self.using_BERT == False:
+        elif self.en_type == "LSTM":
             cap1, cap_len1 = self.get_caption(new_sent_ix1) 
             cap2, cap_len2 = self.get_caption(new_sent_ix2)
             return img1, img2, cap1, cap2, cap_len1, cap_len2, pair_label

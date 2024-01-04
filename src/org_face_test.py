@@ -11,8 +11,7 @@ sys.path.insert(0, ROOT_PATH)
 
 from utils.utils import   merge_args_yaml
 from utils.prepare import prepare_dataloader, prepare_arcface, prepare_adaface, prepare_magface
-from utils.modules import (get_features, get_features_adaface, calculate_scores, 
-                           calculate_identification_acc)
+from utils.modules import (calculate_scores, calculate_identification_acc)
 
 
 def test(test_dl, model, args):
@@ -33,12 +32,12 @@ def test(test_dl, model, args):
 
         # get global and local image features from COTS model
         if args.model_type == "arcface" or args.model_type == "magface":
-            global_feat1,  local_feat1 = get_features(model, img1)
-            global_feat2,  local_feat2 = get_features(model, img2)
+            global_feat1,  local_feat1 = model(img1)
+            global_feat2,  local_feat2 = model(img2)
 
         elif args.model_type == "adaface":
-            global_feat1,  local_feat1, norm = get_features_adaface(model, img1)
-            global_feat2,  local_feat2, norm = get_features_adaface(model, img2)
+            global_feat1,  local_feat1, norm = model(img1)
+            global_feat2,  local_feat2, norm = model(img2)
 
 
         cosine_sim = nn.CosineSimilarity(dim=1, eps=1e-6)
@@ -51,19 +50,18 @@ def test(test_dl, model, args):
         loop.set_postfix()
 
     loop.close()
-    #best_acc, best_th = cal_accuracy(preds, labels)
 
     if not args.is_ident: 
         calculate_scores(preds, labels, args)
     else:
         calculate_identification_acc(preds, args)
+        calculate_scores(preds, labels, args)
 
-    #print("accuracy: %0.4f; threshold %0.4f" %(best_acc, best_th))
 
 
 def parse_args():
     # Training settings
-    cfg_file = "fusion_bert.yml"
+    cfg_file = "test.yml"
     print("loading ", cfg_file)
     parser = argparse.ArgumentParser(description='Testing TGFR model')
     parser.add_argument('--cfg', 
@@ -77,7 +75,7 @@ def parse_args():
 def main(args):
     test_dl, test_ds = prepare_dataloader(args, split="test", transform=None)
 
-    if args.using_BERT == False:
+    if args.en_type == "LSTM":
         args.vocab_size = test_ds.n_words
 
 
@@ -94,6 +92,7 @@ def main(args):
     print("start testing ...")
     args.is_roc = True   
     test(test_dl, model, args)
+
 
 
 if __name__ == "__main__":

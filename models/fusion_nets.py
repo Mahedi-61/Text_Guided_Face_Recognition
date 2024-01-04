@@ -47,7 +47,6 @@ class ScaledDotProductAttention(nn.Module):
         return context, attn
 
 
-
 class DotProductAttention(nn.Module):
     """
     Compute the dot products of the query with all values and apply a softmax function to obtain the weights on the values
@@ -65,27 +64,17 @@ class DotProductAttention(nn.Module):
         return context, attn
 
 
-
 ############### Fusion ###################
-class ConcatFusion(nn.Module):
-    def __init__(self,):
-        super(ConcatFusion, self).__init__()
-
-    def forward(self, img_features, text_embedding):
-        out = torch.cat((img_features, text_embedding), dim=1)
-        return out 
-
-
 class LinearFusion(nn.Module):
     def __init__(self, args):
         super(LinearFusion, self).__init__()
-        dim = 512 + args.aux_feat_dim_per_granularity
+        dim = 256 + args.aux_feat_dim_per_granularity
         self.fc1 = nn.Linear(dim, args.fusion_final_dim) # change 512, 576, 640, 704, 768
-        self.ln = nn.LayerNorm(args.aux_feat_dim_per_granularity) #64
+        self.ln = nn.LayerNorm(args.aux_feat_dim_per_granularity) 
 
-    def forward(self, img_features, word_vector):
-        word_vector = self.ln(word_vector)
-        concat_features =  torch.cat((img_features, word_vector), dim=1) #sent_emb1, word_vector1
+    def forward(self, img_features, sent_emb):
+        #sent_emb = self.ln(sent_emb)
+        concat_features =  torch.cat((img_features, sent_emb), dim=1)
         out = self.fc1(concat_features)
         return out 
 
@@ -171,40 +160,102 @@ class MultiHeadAttention(nn.Module):
 
 
 
-class WordLevelCFA(nn.Module):
-    def __init__(self, channel_dim, scale=2):
-        super(WordLevelCFA,self).__init__()
-        self.channel_dim = channel_dim
-        self.bn_img = nn.BatchNorm2d(channel_dim)
-        self.sa = SelfAttention(channel_dim, scale)
-        self.maxpool = nn.MaxPool2d(kernel_size=2)
-        self.conv = nn.Conv2d(256, channel_dim, kernel_size=(3, 3), padding=1) #padding 2 for adaface
-        self.relu = nn.ReLU()
-        self.avg_pool = nn.AvgPool2d(kernel_size = 2)
-        self.ln = nn.LayerNorm([64, 8, 8])
-        self.ln2 = nn.LayerNorm([64, 8, 8])
-        self.pl_cfa = ParagraphLevelCFA()
-        self.linear = nn.Linear(1024, 768)
-        
 
-    def forward(self, img, word, gl_img=None, sent=None):
+class Working_bad(nn.Module):
+    def __init__(self, channel_dim):
+        super(Working_bad,self).__init__()
+        channel_dim = 144
+        self.bn_img = nn.BatchNorm2d(channel_dim)
+        self.bn_word = nn.BatchNorm2d(channel_dim)
+        self.projection = nn.Linear(256, channel_dim)
+
+        self.sa = SelfAttention(channel_dim, scale=1)
+        self.maxpool = nn.MaxPool2d(kernel_size=2)
+        self.conv = nn.Conv2d(256, channel_dim, kernel_size=(3, 3), padding=0)
+        self.relu = nn.ReLU()
+        self.ln_1 = nn.LayerNorm([channel_dim, 12, 12])
+        self.ln_2 = nn.LayerNorm([channel_dim, 6, 6])
+
+        self.ln_gl_image = nn.LayerNorm([256])
+        self.ln_sent = nn.LayerNorm([256])
+        self.linear = nn.Linear(1296, 512)
+
+
+    def forward(self, img, word, gl_img, sent):
+        img = self.relu(self.conv(img))
+        img = self.bn_img(img)
+        #img = F.normalize(img, p=2, dim=1)
+
+        word = self.projection(word.transpose(1, 2)) #cap_len, 64
+        word = torch.bmm(word.transpose(1, 2), word) / np.sqrt(144) #batch x 256 x 256
+        word = word.unsqueeze(-1).view(word.size(0), word.size(1), 12, 12)
+        word = self.bn_word(word)
+        #word = F.normalize(word, p=2, dim=1)
+
+        #img = self.sa(img, img)
+        #iw = self.ln(img)
+        iw = self.sa(img, word) #img, word
+        iw = self.ln_1(iw)
+        iw = self.maxpool(iw)
+
+        iw = self.sa(iw, iw) #img, word
+        iw = self.ln_2(iw)
+        iw = self.maxpool(iw)
+
+        iw = iw.view(iw.size(0), -1) #batch_size x 1024
+
+        #img_sent = self.pl_cfa(gl_img, sent)
+        #iw = torch.cat((iw, img_sent), dim=1)
+        iw = self.linear(iw)
+        #gl_img = self.ln_gl_image(gl_img) 
+        #sent = self.ln_sent(sent)
+        #return torch.concat((iw, gl_img, sent), dim=1) 
+        return iw 
+
+
+
+class Working(nn.Module):
+    def __init__(self, channel_dim):
+        super(Working,self).__init__()
+        channel_dim = 36
+        self.bn_img = nn.BatchNorm2d(channel_dim)
+        self.bn_word = nn.BatchNorm2d(channel_dim)
+        self.projection = nn.Linear(256, channel_dim)
+
+        self.sa = SelfAttention(channel_dim, scale=1)
+        self.maxpool = nn.MaxPool2d(kernel_size=2)
+        self.conv = nn.Conv2d(256, channel_dim, kernel_size=(3, 3), padding=0)
+        self.relu = nn.ReLU()
+        self.ln = nn.LayerNorm([channel_dim, 6, 6])
+        self.ln_gl_image = nn.LayerNorm([256])
+        self.ln_sent = nn.LayerNorm([256])
+        self.linear = nn.Linear(324, 128)
+
+
+    def forward(self, img, word, gl_img, sent):
         img = self.maxpool(self.relu(self.conv(img)))
         img = self.bn_img(img)
-        word = torch.bmm(word, word.transpose(1, 2)) / np.sqrt(self.channel_dim) #batch x 64 x 64
-        word = word.unsqueeze(-1).view(word.size(0), word.size(1), 8, 8)
+        #img = F.normalize(img, p=2, dim=1)
 
-        img = self.sa(img, img)
-        iw = self.ln(img)
+        word = self.projection(word.transpose(1, 2)) #cap_len, 64
+        word = torch.bmm(word.transpose(1, 2), word) / np.sqrt(36) #batch x 256 x 256
+        word = word.unsqueeze(-1).view(word.size(0), word.size(1), 6, 6)
+        word = self.bn_word(word)
+        #word = F.normalize(word, p=2, dim=1)
+
+        #img = self.sa(img, img)
+        #iw = self.ln(img)
         iw = self.sa(img, word) #img, word
-        iw = self.ln2(iw)
+        iw = self.ln(iw)
         iw = self.maxpool(iw)
         iw = iw.view(iw.size(0), -1) #batch_size x 1024
 
         #img_sent = self.pl_cfa(gl_img, sent)
         #iw = torch.cat((iw, img_sent), dim=1)
         iw = self.linear(iw)
-        return iw 
-
+        gl_img = self.ln_gl_image(gl_img) 
+        sent = self.ln_sent(sent)
+        return torch.concat((iw, gl_img, sent), dim=1) 
 
 
 # Doesn't produce good resutls
@@ -278,11 +329,10 @@ class ConcatAttention(nn.Module):
         return self.linear(patch) 
 
 
-
 if __name__ == "__main__":
     bs = 16
     img = torch.randn((bs, 256, 14, 14))
-    word_emb = torch.randn((bs, 256, 18))
-    w = WordLevelCFA_LSTM(channel_dim = 64)
-    a = w(img, word_emb, 0, 0)
+    word_emb = torch.randn((bs, 256, 23))
+    w = Working(channel_dim = 256)
+    a = w(img, word_emb)
     print(a.shape)

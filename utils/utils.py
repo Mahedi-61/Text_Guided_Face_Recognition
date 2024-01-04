@@ -84,5 +84,5 @@ def load_models(net, metric_fc, optim, path):
 def load_fusion_net(net, path):
     print("loading fusion model .....")
     checkpoint = torch.load(path, map_location=torch.device('cpu'))
-    net = load_model_weights(net, checkpoint['model']["net"])
+    net = load_model_weights(net, checkpoint["net"])
     return net

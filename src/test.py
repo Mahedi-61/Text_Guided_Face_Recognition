@@ -8,54 +8,61 @@ import torch
 
 ROOT_PATH = osp.abspath(osp.join(osp.dirname(osp.abspath(__file__)),  ".."))
 sys.path.insert(0, ROOT_PATH)
-from utils.utils import merge_args_yaml, load_fusion_net
-from utils.prepare import prepare_dataloader, prepare_model, prepare_text_encoder, prepare_fusion_net, prepare_adaface
+
+from utils.utils import merge_args_yaml
+from utils.prepare import (prepare_dataloader, 
+                           prepare_arcface, prepare_adaface, prepare_image_head,
+                           prepare_text_encoder, 
+                           prepare_fusion_net)
 from utils.modules import test
 
 
 def parse_args():
     # Training settings
     print("loading celeba.yml")
-    parser = argparse.ArgumentParser(description='CGFG')
-    parser.add_argument('--cfg', dest='cfg_file', type=str, default='./cfg/celeba.yml',
+    cfg_file = "test.yml"
+    parser = argparse.ArgumentParser(description='Testing TGFR model')
+    parser.add_argument('--cfg', dest='cfg_file', type=str, 
+                        default='./cfg/%s' % cfg_file,
                         help='optional config file')
-    parser.add_argument('--train', type=bool, default=False, help='if train model')
     args = parser.parse_args()
     return args
 
 
-def main(args):
-    test_dl, test_ds = prepare_dataloader(args, split="test", transform=None)
+class Test:
+    def __init__(self, args):
+        self.args = args 
+        self.test_dl, test_ds = prepare_dataloader(args, split="test", transform=None)
+        
+        if self.args.en_type == "LSTM":
+            self.args.vocab_size = test_ds.n_words 
 
-    if args.using_BERT == False:
-        args.vocab_size = test_ds.n_words 
-    
-    if args.model_type == "arcface":
-            model = prepare_model(args)
+        # preapare model
+        self.text_encoder, self.text_head = prepare_text_encoder(self.args)
+        
+        if self.args.model_type == "arcface":
+            self.image_encoder = prepare_arcface(self.args) 
+            
+        elif self.args.model_type == "adaface":
+            self.image_encoder = prepare_adaface(self.args)
 
-    elif args.model_type == "adaface":
-            model = prepare_adaface(args)
-
-    
-    # load from checkpoint
-    net = prepare_fusion_net(args)
-    
-    for i in [80]:
-        args.text_encoder_path = "./checkpoints/celeba/Pretrain/BiLSTM/adaface/best_adaface_text_encoder_bert_%d.pth" % i
-        text_encoder, text_head = prepare_text_encoder(args, test=True)
+        self.image_head = prepare_image_head(self.args)
 
         if args.fusion_type != "concat":
-            print("loading checkpoint; epoch: ", i)
-            load_path = "./checkpoints/celeba/Fusion/final_cross_att/bert_cross_attention_epoch_%d.pth" % i
-            net = load_fusion_net(net, load_path) 
-        
-        #pprint.pprint(args)
-        print("Start Testing")
-        args.is_roc = True   
-        test(test_dl, model, net, text_encoder, text_head, args)
+            self.fusion_net = prepare_fusion_net(self.args) 
+        else:
+            self.fusion_net = None 
+
+
+    def main(self):
+        #pprint.pprint(self.args)
+        print("\nLet's test the model")
+        test(self.test_dl, 
+            self.image_encoder, self.image_head,  
+            self.fusion_net, 
+            self.text_encoder, self.text_head, 
+            self.args)
     
-
-
 
 if __name__ == "__main__":
     args = merge_args_yaml(parse_args())
@@ -68,7 +75,6 @@ if __name__ == "__main__":
     torch.manual_seed(args.manual_seed)
 
     torch.cuda.manual_seed_all(args.manual_seed)
-    #torch.cuda.set_device(args.gpu_id)
     args.device = torch.device("cuda")
 
-    main(args)
+    Test(args).main()

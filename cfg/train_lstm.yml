@@ -1,12 +1,13 @@
 #### configuration and directory
 CONFIG_NAME: Train
-dataset_name: face2text
-data_dir: ./data/face2text
+dataset_name: face2text #face2text
+data_dir: ./data/face2text #face2text
 checkpoints_path: ./checkpoints 
 
 weights_adaface: "./weights/pretrained/adaface_ir18_webface4m.ckpt"
 weights_arcface: "./weights/pretrained/arcface_ir18_ms1mv3.pth"
 weights_magface: "./weights/pretrained/magface_iresnet18_casia_dp.pth"
+valid_pair_list: ./data/face2text/images/valid_199_sub.txt 
 
 # machine setup
 num_workers: 8 
@@ -15,10 +16,12 @@ manual_seed: 100
 CUDA: True
 
 # losses
-is_DAMSM: True  
-is_CLIP: True    
-is_CMP: True       
-lambda_cl: 2.0
+is_DAMSM: True    
+is_CLIP: True     
+is_CMP: False   
+is_ident_loss: True            
+lambda_clip: 1.0
+lambda_id: 100 
 
 # model arch 
 aux_feat_dim_per_granularity: 256
@@ -27,22 +30,20 @@ model_type: arcface #arcface, adaface, magface
 ch_size: 3 
 num_classes: 4500                
 
-init_lr_lstm: 0.0003
-min_lr_lstm: 0.0001 
-r_step: 2000
+init_lr_lstm: 0.001
+min_lr_lstm: 0.00009 
+r_step: 100
 lr_head: 0.002
-weight_decay: 0.001
-clip_max_norm: 0.25 
+weight_decay: 0.0001
+clip_max_norm: 0.50 
 
 
 #trainng settings
-batch_size: 128 #16 for first step *****************CHANGE
-max_epoch: 20 
-test_interval: 1
+batch_size: 128 
+max_epoch: 36 
+test_interval: 2
 save_interval: 1
-patience: 8 
-factor: 0.8
-temperature: 1.0
+temperature: 2.0
 
 # flags
 do_test: False   
@@ -55,9 +56,7 @@ TRAIN:
         GAMMA2: 5.0
         GAMMA3: 10.0
 
-using_BERT: False       
-rnn_type: LSTM #GRU
+en_type: LSTM #GRU, BERT
 lstm_words_num: 18 
 embedding_dim: 256
-captions_per_image: 4 #10
-bert_config:  bert-base-uncased #distilbert-base-uncased 
+captions_per_image: 4 #4, 10

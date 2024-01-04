@@ -3,9 +3,9 @@ import os
 import random 
 
 num_genuine_per_sub = 1
-imposter_subject = 200 - 1 #1 genuine and 199 impsoter
-set = "valid"
-img_dir = "../face2text/%s" % set
+imposter_subject = 300 - 1 #1 genuine and 199 impsoter
+set = "test"
+img_dir = "../images/%s" % set
 all_subjects = sorted(os.listdir(img_dir), key = lambda x: int(x))
 
 ls_subjectes = [sorted(os.listdir(os.path.join(img_dir, sub)), 

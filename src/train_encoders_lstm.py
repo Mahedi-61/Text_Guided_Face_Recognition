@@ -15,12 +15,14 @@ import itertools
 ROOT_PATH = osp.abspath(osp.join(osp.dirname(osp.abspath(__file__)),  ".."))
 sys.path.insert(0, ROOT_PATH)
 from utils.utils import mkdir_p, merge_args_yaml
-from models.losses import clip_loss, sent_loss, words_loss, CMPLoss
-from utils.prepare import prepare_dataloader, prepare_train_data, prepare_adaface, prepare_arcface
-
-from models.models import (RNN_ENCODER, ArcFace_Heading)
-from datetime import date
-today = date.today() 
+from models.losses import sent_loss, words_loss, CMPLoss, ClipLoss
+from utils.prepare import prepare_dataloader, prepare_train_data, prepare_adaface, prepare_arcface    
+from utils.modules import calculate_identification_acc, calculate_scores  
+from models.models import (RNNEncoder, ImageHeading)
+from models import metrics, losses
+from datetime import datetime 
+from utils.prepare import prepare_test_data
+today = datetime.now() 
 
 
 def parse_args():
@@ -41,12 +43,14 @@ class Train:
 
         # prepare dataloader
         self.train_dl, train_ds = prepare_dataloader(self.args, split="train", transform=None)
+        self.valid_dl, valid_ds = prepare_dataloader(self.args, split="valid", transform=None)
         print("Loading training and valid data ...")
         
         self.args.len_train_dl = len(self.train_dl)
         print("dataset words: %s, embeddings number: %s" % (train_ds.n_words, train_ds.embeddings_num))
         self.args.vocab_size = train_ds.n_words
-        del train_ds
+
+        del train_ds, valid_ds 
 
         # Build model
         self.build_models()
@@ -57,11 +61,11 @@ class Train:
                                 self.args.dataset_name, 
                                 self.args.CONFIG_NAME, 
                                 "BiLSTM_" + self.args.model_type, 
-                                today.strftime("%m-%d-%y"))
+                                today.strftime("%m-%d-%y-%H:%M"))
         mkdir_p(save_dir)
 
         checkpoint_image_en = {
-            "head": self.image_head.state_dict()
+            "image_head": self.image_head.state_dict()
         }
 
         torch.save(checkpoint_image_en, '%s/%s_image_encoder_%d.pth' % 
@@ -74,6 +78,7 @@ class Train:
 
         torch.save(checkpoint_text_en, '%s/%s_text_encoder_%d.pth' % 
                     (save_dir, self.args.en_type, self.args.current_epoch))
+
 
 
     def resume_checkpoint(self):
@@ -93,7 +98,7 @@ class Train:
         print('Load ', name)
 
 
-    def print_losses(self, s_total_loss, w_total_loss, total_cl_loss, total_cmp_loss, total_length):
+    def print_losses(self, s_total_loss, w_total_loss, total_cl_loss, total_cmp_loss, total_idn_loss, total_length):
         print(' | epoch {:3d} |' .format(self.args.current_epoch))
         if self.args.is_DAMSM == True:
             total_damsm_loss = (s_total_loss + w_total_loss) / total_length
@@ -102,56 +107,106 @@ class Train:
             print('s_loss {:5.5f} | w_loss {:5.5f} | DAMSM loss {:5.5}'.format(s_total_loss, w_total_loss, total_damsm_loss)) 
 
         if self.args.is_CLIP == True:
-            print("Total clip loss: {:5.5f} ".format(total_cl_loss.detach().cpu().numpy() / total_length))
+            print("Total clip loss: {:5.5f} ".format(total_cl_loss / total_length))
 
         if self.args.is_CMP == True: 
             print("Total cmp loss: {:5.5f} ".format(total_cmp_loss / total_length))
+            
+        if self.args.is_ident_loss == True: 
+            print("Total identity loss: {:5.5f} ".format(total_idn_loss / total_length))
+
+
+    def build_image_encoders(self):
+        if self.args.model_type == "arcface":
+            self.image_encoder = prepare_arcface(self.args)
+            self.image_head = ImageHeading(self.args)
+
+
+        elif self.args.model_type == "adaface":
+            self.image_encoder = prepare_adaface(self.args)
+            self.image_head = ImageHeading(self.args)
+            """"
+            self.image_cls = metrics.AdaFace(self.args.aux_feat_dim_per_granularity,
+                                            self.args.num_classes,
+                                            m=0.4,
+                                            h=0.333, 
+                                            s=50)
+            """
+
+        self.image_cls = metrics.ArcMarginProduct(self.args.aux_feat_dim_per_granularity, 
+                                                self.args.num_classes, 
+                                                s=30, 
+                                                m=0.5, 
+                                                easy_margin=False)
+            
+        self.image_head = nn.DataParallel(self.image_head, 
+                                device_ids=self.args.gpu_id).to(self.args.device)
+            
+        self.image_cls = torch.nn.DataParallel(self.image_cls, 
+                                device_ids=self.args.gpu_id).to(self.args.device)
+
 
 
     def build_models(self):
         # building image encoder
-        if self.args.model_type == "arcface":
-            self.image_encoder = prepare_arcface(self.args)
-            self.image_head = ArcFace_Heading(self.args)
-            self.image_head = nn.DataParallel(self.image_head, device_ids=self.args.gpu_id).cuda() 
-
-        elif self.args.model_type == "adaface":
-            self.image_encoder = prepare_adaface(self.args)
-            self.image_head = ArcFace_Heading(self.args)
-            self.image_head = nn.DataParallel(self.image_head, device_ids=self.args.gpu_id).cuda() 
+        self.build_image_encoders()
 
 
         # building text encoder
-        self.text_encoder = RNN_ENCODER(self.args, nhidden=self.args.embedding_dim).cuda()
+        self.text_encoder = RNNEncoder(self.args, nhidden=self.args.embedding_dim).cuda()
+        self.text_cls = metrics.ArcMarginProduct(self.args.aux_feat_dim_per_granularity, 
+                                                self.args.num_classes, 
+                                                s=35, 
+                                                m=0.5, 
+                                                easy_margin=False)
+        
+        self.text_cls = torch.nn.DataParallel(self.text_cls, 
+                                              device_ids=self.args.gpu_id).to(self.args.device)
+        
+        self.ident_loss = losses.FocalLoss(gamma=2) 
+            
 
-
-        params = [
-            {"params": self.text_encoder.parameters(), "lr": self.args.init_lr_lstm},
-        ]
 
         params_head = [
-            {"params": itertools.chain(self.image_head.parameters()),
-            "lr": self.args.lr_head}
+            {"params": itertools.chain(self.image_head.parameters())}
         ]
 
-        self.optimizer = torch.optim.AdamW(params,  
-                                    betas=(0.9, 0.999), 
-                                    weight_decay=self.args.weight_decay)
+        params_cls = [
+            {"params": itertools.chain(self.image_cls.parameters(), 
+                                       self.text_cls.parameters())}
+        ]
+
+
+        self.optimizer = torch.optim.Adam(self.text_encoder.parameters(),  
+                                          betas=(0.9, 0.50), 
+                                          weight_decay=args.weight_decay,
+                                          lr = self.args.init_lr_lstm) 
         
-        #optimizer = torch.optim.Adam(params,  betas=(0.9, 0.999), weight_decay=args.weight_decay) 
-        self.optimizer_head = torch.optim.Adam(params_head,  betas=(0.5, 0.999)) 
+        self.optimizer_head = torch.optim.Adam(params_head,  
+                                            betas=(0.5, 0.999), 
+                                            lr = self.args.lr_head) 
 
-        self.lr_scheduler_head = torch.optim.lr_scheduler.ReduceLROnPlateau(
-                                                                self.optimizer_head, mode="min", 
-                                                                patience=self.args.patience, 
-                                                                factor=self.args.factor)
+        self.optimizer_cls = torch.optim.SGD(params_cls, lr=0.1, momentum=0.9, weight_decay=5e-5)
 
-
+        self.lr_scheduler = torch.optim.lr_scheduler.ExponentialLR(self.optimizer, 
+                                                                        gamma=0.98)
+        
+        self.lr_scheduler_head = torch.optim.lr_scheduler.ExponentialLR(self.optimizer_head, 
+                                                                        gamma=0.98)
+        
         #resume checkpoint
         self.start_epoch = 1
-        #self.start_epoch = self.args.resume_epoch + self.start_epoch
-        #resume_checkpoint(self.args.resume_epoch, self.text_encoder, self.image_encoder, \
-        # self.image_head, self.optimizer, self.optimizer_head)
+
+        # initialize losses
+        if self.args.is_CMP == True: 
+            self.cmp_loss = CMPLoss(is_CMPM = False, 
+                               is_CMPC = True, 
+                               num_classes = self.args.num_classes, 
+                               feature_dim = self.args.aux_feat_dim_per_granularity)
+            self.cmp_loss.cuda()
+
+        if self.args.is_CLIP == True: 
+            self.clip_loss = ClipLoss()
 
 
     def prepare_labels(self, batch_size):
@@ -159,9 +214,10 @@ class Train:
         return match_labels.cuda()
 
 
-    def train(self, cmp_loss):
-
+    def train(self):
         self.text_encoder.train()
+        self.text_cls.train()
+        self.image_cls.train()
         self.image_head.train()
 
         labels = self.prepare_labels(self.args.batch_size)
@@ -174,6 +230,7 @@ class Train:
         total_cl_loss = 0
         total_cmp_loss = 0
         total_damsm_loss = 0
+        total_idn_loss = 0
 
         loop = tqdm(total = len(self.train_dl))
         for data in self.train_dl:  
@@ -184,43 +241,60 @@ class Train:
 
             """
             Image Encoder
-            words_features: batch_size x nef x 16 x 16 (arcface) [14x14 for adaface]
-            sent_code: batch_size x nef
+            words_features: batch_size x nef x 14 x 14
+            img_features: batch_size x nef
             """
-
             if self.args.model_type == "adaface":
-                sent_code, words_features, norm = self.image_encoder(imgs)
+                img_features, words_features, norm = self.image_encoder(imgs)
             else:
-                sent_code, words_features = self.image_encoder(imgs)
+                img_features, words_features = self.image_encoder(imgs)
 
-            sent_code, words_features = self.image_head(sent_code, words_features)
+            img_features, words_features = self.image_head(img_features, words_features)
 
             self.optimizer.zero_grad()
             self.optimizer_head.zero_grad() 
+            self.optimizer_cls.zero_grad() 
             total_loss = 0
 
             if self.args.is_DAMSM == True:
                 w_loss0, w_loss1, attn_maps = words_loss(words_features, words_emb, labels, 
                                         cap_lens, class_ids.numpy(), self.args.batch_size, self.args)
                 
-                s_loss0, s_loss1 = sent_loss(sent_code, sent_emb, labels, class_ids.numpy(), self.args.batch_size, self.args)
+                s_loss0, s_loss1 = sent_loss(img_features, sent_emb, labels, 
+                                             class_ids.numpy(), self.args.batch_size, self.args)
 
-                damsm_loss = s_loss0 + s_loss1 + w_loss0 + w_loss1 
+                damsm_loss =  w_loss0 + w_loss1 #+ s_loss0 + s_loss1 
                 total_damsm_loss += damsm_loss.item()
                 total_loss += damsm_loss 
                 w_total_loss += ((w_loss0 + w_loss1).data).item()
-                s_total_loss += ((s_loss0 + s_loss1).data).item()
+                #s_total_loss += ((s_loss0 + s_loss1).data).item()
+
+
+            if self.args.is_ident_loss == True: 
+                class_ids = class_ids.cuda() 
+                # for text branch
+                output = self.text_cls(sent_emb, class_ids)
+                tid_loss = self.ident_loss(output, class_ids)
+
+                # for image branch
+                output = self.image_cls(img_features, class_ids)
+                iid_loss = self.ident_loss(output, class_ids)
+
+                total_loss += self.args.lambda_id * (tid_loss + iid_loss)  
+                total_idn_loss = self.args.lambda_id* (tid_loss.item() + iid_loss.item())
+
 
             # clip loss
             if self.args.is_CLIP == True:
-                cl_loss = clip_loss(sent_emb, sent_code, self.args) 
-                total_loss += self.args.lambda_cl * cl_loss
-                total_cl_loss += self.args.lambda_cl * cl_loss  
+                cl_loss = self.clip_loss(sent_emb, img_features, self.args) 
+                total_loss += self.args.lambda_clip * cl_loss
+                total_cl_loss += self.args.lambda_clip * cl_loss.item()  
+
 
             # cross-modal projection loss
             if self.args.is_CMP == True: 
                 class_ids = class_ids.cuda() 
-                cmp, _, __ = cmp_loss(sent_emb, sent_code, class_ids)
+                cmp, _, __ = self.cmp_loss(sent_emb, img_features, class_ids)
                 total_loss += cmp
                 total_cmp_loss += cmp.item()
 
@@ -228,7 +302,8 @@ class Train:
             total_loss.backward()
             self.optimizer.step()
             self.optimizer_head.step()
-            self.lr_scheduler.step()
+            self.optimizer_cls.step()
+            
 
             #`clip_grad_norm` helps prevent the exploding gradient problem in RNNs / LSTMs.        
             torch.nn.utils.clip_grad_norm_(self.text_encoder.parameters(), self.args.clip_max_norm)
@@ -239,36 +314,92 @@ class Train:
             loop.set_postfix()
 
         loop.close()
-        self.print_losses(s_total_loss, w_total_loss, total_cl_loss, total_cmp_loss, total_length)
-        return total_damsm_loss + total_cl_loss + total_cmp_loss
+        self.print_losses(s_total_loss, w_total_loss, total_cl_loss, total_cmp_loss, total_idn_loss, total_length)
+
+
+    def test(self):
+        device = self.args.device
+        self.image_encoder.eval() 
+        self.text_encoder.eval()
+        preds = []
+        g_truth = []
+
+        with torch.no_grad():
+            loop = tqdm(total=len(self.valid_dl))
+            for step, data in enumerate(self.valid_dl, 0):
+                img1, img2, words_emb1, words_emb2, sent_emb1, sent_emb2, \
+                        pair_label = prepare_test_data(data, self.text_encoder)
+                
+                # upload to cuda
+                img1 = img1.to(device)
+                img2 = img2.to(device)
+                pair_label = pair_label.to(device)
+
+                if self.args.model_type == "arcface":
+                    global_feat1,  local_feat1 = self.image_encoder(img1)
+                    global_feat2,  local_feat2 = self.image_encoder(img2)
+                    
+                elif self.args.model_type == "adaface":
+                    global_feat1,  local_feat1, norm = self.image_encoder(img1)
+                    global_feat2,  local_feat2, norm = self.image_encoder(img2)
+
+                sent_emb1 = sent_emb1.to(device)
+                sent_emb2 = sent_emb2.to(device)
+
+                proj_img_feat1, _ = self.image_head(global_feat1, local_feat1)
+                proj_img_feat2, _ = self.image_head(global_feat2, local_feat2)
+
+                out1 =  torch.cat((proj_img_feat1, sent_emb1), dim=1) 
+                out2 =  torch.cat((proj_img_feat2, sent_emb2), dim=1)
+
+                del local_feat1, local_feat2, words_emb1, words_emb2
+
+                cosine_sim = nn.CosineSimilarity(dim=1, eps=1e-6)
+                pred = cosine_sim(out1, out2)
+                preds += pred.data.cpu().tolist()
+                g_truth += pair_label.data.cpu().tolist()
+
+                # update loop information
+                loop.update(1)
+                loop.set_postfix()
+
+        loop.close()
+        calculate_scores(preds, g_truth, args)
+        #calculate_identification_acc(preds, args)
 
 
     def main(self):
-
-        if self.args.is_CMP == True: 
-            # initialize losses
-            cmp_loss = CMPLoss(is_CMPM = True, 
-                               is_CMPC = True, 
-                               num_classes = self.args.num_classes, 
-                               feature_dim = self.args.aux_feat_dim_per_granularity)
-            cmp_loss.cuda()
-        else:
-            cmp_loss = 0
-
+        LR_change_seq = [3, 8]
+        lr = 0.1
         for epoch in range(self.start_epoch, self.args.max_epoch + 1):
             self.args.current_epoch = epoch
 
+            """
             print('Reset scheduler')
             self.lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(self.optimizer, 
                                                                     T_max = self.args.r_step, 
                                                                     eta_min = self.args.min_lr_lstm)
-            
-            total_loss = self.train(cmp_loss)
-            self.lr_scheduler_head.step(total_loss)
+            """
+            self.train()
+            self.lr_scheduler_head.step()
+            self.lr_scheduler.step()
+
+            if epoch in LR_change_seq: 
+                for g in self.optimizer_cls.param_groups:
+                    lr = lr * 0.1
+                    g['lr'] = lr 
+                    print("Learning Rate change to: {:0.5f}".format(lr))
 
             if (epoch % self.args.save_interval == 0 or epoch == self.args.max_epoch):
                 print("saving image and text encoder\n")
                 self.save_encoders()
+
+            if (epoch > 20):
+                if (epoch % args.test_interval == 0 and epoch != 0):
+                    print("Start Validating")
+                    args.is_roc = False   
+                    self.test()
+
 
 
 if __name__ == "__main__":

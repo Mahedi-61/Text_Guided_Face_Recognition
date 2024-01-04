@@ -326,7 +326,7 @@ class Backbone(Module):
             if idx == 5:
                 local_feat = x 
 
-        x = self.output_layer(x)
+        x = self.output_layer(x) #to get 512x7x7
         norm = torch.norm(x, 2, 1, True)
         global_feat = torch.div(x, norm)
 

@@ -8,7 +8,7 @@ from utils.dataset_utils import *
 #                    Train Dataset
 ################################################################
 
-class TextImgTrainDataset(data.Dataset):
+class TrainDataset(data.Dataset):
     def __init__(self, filenames, captions, att_masks, ixtoword=None, wordtoix=None, 
                     n_words=None, transform=None, split="train", args=None):
 
@@ -17,17 +17,17 @@ class TextImgTrainDataset(data.Dataset):
         self.embeddings_num = args.captions_per_image
         self.data_dir = args.data_dir
         self.dataset_name = args.dataset_name
-        self.using_BERT = args.using_BERT
+        self.en_type = args.en_type
         self.model_type = args.model_type
         self.split = split 
 
-        if args.using_BERT == True: 
+        if args.en_type == "BERT": 
             self.filenames = filenames
             self.captions = captions 
             self.att_masks = att_masks
             self.word_num = args.bert_words_num 
 
-        elif args.using_BERT == False:
+        elif args.en_type == "LSTM":
             self.filenames = filenames
             self.captions = captions 
             self.ixtoword = ixtoword
@@ -68,8 +68,7 @@ class TextImgTrainDataset(data.Dataset):
         cls_id = self.class_id[index]
         data_dir = os.path.join(self.data_dir, "images")
 
-        if self.dataset_name == "celeba" or self.dataset_name == "face2text":
-            img_extension = ".jpg"
+        img_extension = ".jpg" # works for all dataset 
 
         img_name = os.path.join(data_dir, self.split, key + img_extension)
         imgs = get_imgs(img_name, self.split, self.transform, self.model_type)
@@ -78,11 +77,11 @@ class TextImgTrainDataset(data.Dataset):
         sent_ix = random.randint(0, self.embeddings_num)
         new_sent_ix = index * self.embeddings_num + sent_ix
 
-        if self.using_BERT == True: 
+        if self.en_type == "BERT": 
             caps, mask = self.captions[sent_ix], self.att_masks[sent_ix]
             return imgs, caps, mask, key, cls_id 
 
-        elif self.using_BERT == False: 
+        elif self.en_type == "LSTM": 
             caps, cap_len = self.get_caption(new_sent_ix)
             return imgs, caps, cap_len, key, cls_id 
 
