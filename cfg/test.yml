@@ -8,7 +8,6 @@ valid_pair_list: ./data/face2text/images/valid_199_sub.txt
 
 weights_adaface: "./weights/pretrained/adaface_ir18_webface4m.ckpt"
 weights_arcface: "./weights/pretrained/arcface_ir18_ms1mv3.pth"
-weights_magface: "./weights/pretrained/magface_iresnet18_casia_dp.pth"
 
 text_encoder_path: "./checkpoints/face2text/Fusion/BERT_arcface/fcfm/encoder_BERT_fcfm_36.pth"
 image_encoder_path: "./checkpoints/face2text/Fusion/BERT_arcface/fcfm/fusion_fcfm_arcface_36.pth"

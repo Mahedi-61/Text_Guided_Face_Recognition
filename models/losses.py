@@ -10,7 +10,6 @@ from torch.autograd import Variable
 
 # ################## Loss for matching text-image ###################
 def cosine_similarity(x1, x2, dim=1, eps=1e-8):
-    #Returns cosine similarity between x1 and x2, computed along dim.
     w12 = torch.sum(x1 * x2, dim)
     w1 = torch.norm(x1, 2, dim)
     w2 = torch.norm(x2, 2, dim)
@@ -18,12 +17,10 @@ def cosine_similarity(x1, x2, dim=1, eps=1e-8):
 
 
 def sent_loss(cnn_code, rnn_code, labels, class_ids, batch_size, args, eps=1e-8):
-    # ### Mask mis-match samples  ###
-    # that come from the same class as the real sample ###
     masks = []
     if class_ids is not None:
         for i in range(batch_size):
-            mask = (class_ids == class_ids[i]).astype(np.bool)
+            mask = (class_ids == class_ids[i]).astype(bool)
             mask[i] = 0
             masks.append(mask.reshape((1, -1)))
         masks = np.concatenate(masks, 0)
@@ -76,7 +73,7 @@ def words_loss(img_features, words_emb, labels, cap_lens, class_ids, batch_size,
     for i in range(batch_size):
         """
         if class_ids is not None:
-            mask = (class_ids == class_ids[i]).astype(np.bool)
+            mask = (class_ids == class_ids[i]).astype(bool)
             mask[i] = 0
             masks.append(mask.reshape((1, -1)))
         """

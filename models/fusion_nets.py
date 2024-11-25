@@ -257,8 +257,6 @@ class Working(nn.Module):
         sent = self.ln_sent(sent)
         return torch.concat((iw, gl_img, sent), dim=1) 
 
-
-# Doesn't produce good resutls
 class WordLevelCFA_LSTM(nn.Module):
     def __init__(self, channel_dim, scale=2):
         super(WordLevelCFA_LSTM,self).__init__()

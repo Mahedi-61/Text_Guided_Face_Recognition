@@ -16,11 +16,11 @@ def prepare_text_encoder(args):
         text_encoder =  TextEncoder(args)
         text_encoder = torch.nn.DataParallel(text_encoder, device_ids=args.gpu_id).cuda()
         state_dict = torch.load(args.text_encoder_path)
-        text_encoder.load_state_dict(state_dict['model'])
+        text_encoder.load_state_dict(state_dict['model'], strict=False)
 
         text_head = TextHeading(args)
         text_head = torch.nn.DataParallel(text_head, device_ids=args.gpu_id).cuda()
-        text_head.load_state_dict(state_dict['head'])
+        text_head.load_state_dict(state_dict['head'], strict=False)
         del state_dict
 
 

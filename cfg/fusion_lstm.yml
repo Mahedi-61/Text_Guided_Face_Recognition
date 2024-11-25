@@ -6,7 +6,6 @@ valid_pair_list: ./data/face2text/images/valid_199_sub.txt
 
 weights_adaface: "./weights/pretrained/adaface_ir18_webface4m.ckpt"
 weights_arcface: "./weights/pretrained/arcface_ir18_ms1mv3.pth"
-weights_magface: "./weights/pretrained/magface_iresnet18_casia_dp.pth"
 
 checkpoints_path: ./checkpoints
 text_encoder_path: "./checkpoints/face2text/Train/BiLSTM_arcface/LSTM_text_encoder_32.pth"
@@ -21,7 +20,7 @@ cuda: True
 
 # model arch
 img_size: 112
-model_type: arcface   #adaface, arcface, magface
+model_type: arcface   #adaface, arcface
 ch_size: 3
 resume_epoch: 1
 

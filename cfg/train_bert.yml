@@ -1,7 +1,7 @@
 #### configuration and directory
 CONFIG_NAME: Train 
-dataset_name: face2text #face2text
-data_dir: ./data/face2text  #face2text
+dataset_name: face2text 
+data_dir: ./data/face2text  
 checkpoints_path: ./checkpoints
 
 weights_adaface: "./weights/pretrained/adaface_ir18_webface4m.ckpt"
@@ -24,7 +24,6 @@ is_ident_loss: True
 lambda_clip: 2.0
 lambda_id:  100
 
-
 # model arch 
 aux_feat_dim_per_granularity: 256
 img_size: 112 
@@ -33,7 +32,7 @@ ch_size: 3
 num_classes: 4500 
 
 init_lr_bert: 0.00007  #(7e-5) initial learnig rate 
-min_lr_bert: 0.00002 #(1e-5 for BERT)
+min_lr_bert: 0.00002)
 lr_head: 0.001
 weight_decay: 0.01 #0.01 for BERT
 clip_max_norm: 1.0
@@ -60,8 +59,8 @@ en_type: "BERT"
 bert_words_num: 24
 captions_per_image: 4 #4, 10 
 
-bert_type: "bert" #bert 
-bert_config:  bert-base-uncased #distilbert-base-uncased 
+bert_type: "bert" 
+bert_config:  bert-base-uncased 
 align_config: kakaobrain/align-base
 clip_config: openai/clip-vit-base-patch32
 blip_config: Salesforce/blip-image-captioning-base

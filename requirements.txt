@@ -1,0 +1,16 @@
+python==3.11.5 
+torch==2.5.1
+torchsummary==1.5.1
+torchvision==0.20.1 
+timm==0.4.12
+transformers==4.29.2
+matplotlib==3.7.1 
+albumentations==1.4.21
+numpy==1.24.4
+opencv-python==4.10.0.84
+pandas==1.5.3
+Pillow==9.4.0
+scipy==1.10.1
+easydict==1.13              
+einops==0.8.0              
+tqdm==4.65.0   

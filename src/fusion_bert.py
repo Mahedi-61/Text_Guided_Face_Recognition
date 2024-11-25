@@ -42,7 +42,6 @@ class Fusion:
     def __init__(self, args):
 
         self.args = args 
-        # prepare dataloader
         self.train_dl, train_ds = prepare_dataloader(self.args, split="train", transform=None)
         self.valid_dl, valid_ds = prepare_dataloader(self.args, split="valid", transform=None)
         print("Loading training and valid data ...")
@@ -250,7 +249,6 @@ class Fusion:
     
 
     def main(self):
-        #pprint.pprint(self.args)
         print("Start Training")
 
         for epoch in range(self.strat_epoch, self.args.max_epoch + 1):

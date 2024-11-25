@@ -209,7 +209,6 @@ class Train:
         if self.args.is_CLIP == True: 
             self.clip_loss = ClipLoss()
 
-        #optimizer = torch.optim.Adam(params,  betas=(0.9, 0.999), weight_decay=self.args.weight_decay) 
         self.optimizer_head = torch.optim.Adam(params_head,  betas=(0.5, 0.999)) 
 
         self.optimizer = torch.optim.Adam(self.text_encoder.parameters(),  
@@ -258,12 +257,6 @@ class Train:
                     prepare_train_data_for_Bert((caps, masks), self.text_encoder, self.text_head)
             cap_lens = None 
 
-            """
-            Image Encoder
-            words_features: batch_size x nef x 16 x 16 (arcface) [14x14 for adaface]
-            img_features: batch_size x nef
-            """
-
             if self.args.model_type == "adaface":
                 img_features, words_features, norm = self.image_encoder(imgs)
             else:
@@ -280,14 +273,14 @@ class Train:
                 w_loss0, w_loss1, attn_maps = words_loss(words_features, words_emb, labels, 
                                     cap_lens, class_ids.numpy(), batch_size, self.args)
                 
-                #s_loss0, s_loss1 = sent_loss(img_features, sent_emb, labels, 
-                #                    class_ids.numpy(), batch_size, self.args)
+                s_loss0, s_loss1 = sent_loss(img_features, sent_emb, labels, 
+                                    class_ids.numpy(), batch_size, self.args)
 
-                damsm_loss = w_loss0 + w_loss1 #s_loss0 + s_loss1 
+                damsm_loss = w_loss0 + w_loss1 + s_loss0 + s_loss1 
                 total_damsm_loss += damsm_loss.item()
                 total_loss += damsm_loss 
                 w_total_loss += ((w_loss0 + w_loss1).data).item()
-                #s_total_loss += ((s_loss0 + s_loss1).data).item()
+                s_total_loss += ((s_loss0 + s_loss1).data).item()
 
 
             if self.args.is_WRA == True:
@@ -314,7 +307,7 @@ class Train:
 
             # clip loss
             if self.args.is_CLIP == True:
-                cl_loss = global_loss(img_features, sent_emb) #self.clip_loss(sent_emb, img_features, self.args) 
+                cl_loss = global_loss(img_features, sent_emb) 
                 total_loss += self.args.lambda_clip * cl_loss
                 total_cl_loss += self.args.lambda_clip * cl_loss  
 

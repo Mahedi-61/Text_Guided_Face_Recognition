@@ -8,7 +8,6 @@ valid_pair_list: ./data/face2text/images/valid_199_sub.txt
 
 weights_adaface: "./weights/pretrained/adaface_ir18_webface4m.ckpt"
 weights_arcface: "./weights/pretrained/arcface_ir18_ms1mv3.pth"
-weights_magface: "./weights/pretrained/magface_iresnet18_casia_dp.pth"
 
 text_encoder_path: "./checkpoints/face2text/Train/BERT_arcface/bert/bert_text_encoder_18.pth"
 image_encoder_path: "./checkpoints/face2text/Train/BERT_arcface/bert/arcface_image_encoder_18.pth"
@@ -39,8 +38,8 @@ en_type: "BERT"
 bert_words_num: 24
 captions_per_image: 4
 
-bert_type: "bert" #bert 
-bert_config:  bert-base-uncased #distilbert-base-uncased 
+bert_type: "bert" 
+bert_config:  bert-base-uncased 
 align_config: kakaobrain/align-base
 clip_config: openai/clip-vit-base-patch32
 blip_config: Salesforce/blip-image-captioning-base
